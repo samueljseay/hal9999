@@ -7,6 +7,7 @@ export interface Instance {
   plan: string;
   snapshotId?: string;
   createdAt: string;
+  sshPort?: number;
 }
 
 export interface Snapshot {

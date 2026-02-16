@@ -1,0 +1,102 @@
+# HAL9999 Lima VM Template
+# Creates a lightweight Debian VM for running coding agents locally.
+# Usage: limactl start --name hal9999-test src/image/hal9999.yaml
+
+# Use Debian 13 (trixie) to match the production golden image
+images:
+  - location: "https://cloud.debian.org/images/cloud/trixie/daily/latest/debian-13-generic-arm64-daily.qcow2"
+    arch: "aarch64"
+  - location: "https://cloud.debian.org/images/cloud/trixie/daily/latest/debian-13-generic-amd64-daily.qcow2"
+    arch: "x86_64"
+
+# Use Apple Virtualization.framework for better perf on macOS
+vmType: "vz"
+rosetta:
+  enabled: true
+  binfmt: true
+
+cpus: 2
+memory: "4GiB"
+disk: "20GiB"
+
+# SSH — let Lima pick a port automatically
+ssh:
+  localPort: 0
+  loadDotSSHPubKeys: true
+  forwardAgent: false
+
+# The VM user — matches the "agent" user from the DO golden image
+user:
+  name: "agent"
+  comment: "HAL9999 Agent"
+  home: "/home/agent"
+  shell: "/bin/bash"
+
+# Mount nothing by default — tasks clone repos inside the VM
+mounts: []
+
+# Provision scripts — equivalent to src/image/setup.sh
+provision:
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+      export DEBIAN_FRONTEND=noninteractive
+
+      apt-get update -qq
+      apt-get upgrade -y -qq
+
+      apt-get install -y -qq \
+        git \
+        curl \
+        wget \
+        unzip \
+        build-essential \
+        ca-certificates \
+        gnupg \
+        jq \
+        openssh-server
+
+      # Node.js 22 LTS
+      mkdir -p /etc/apt/keyrings
+      curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+        | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
+      echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" \
+        > /etc/apt/sources.list.d/nodesource.list
+      apt-get update -qq
+      apt-get install -y -qq nodejs
+
+      # Create workspace directory
+      mkdir -p /workspace
+      chown agent:agent /workspace
+
+      # Cleanup
+      apt-get clean
+      rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+  - mode: user
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+
+      # Install bun
+      curl -fsSL https://bun.sh/install | bash
+
+      # Agent-agnostic: install Claude Code for now, but the agent
+      # command is determined by the orchestrator, not the image.
+      curl -fsSL https://claude.ai/install.sh | bash || true
+
+      # Set up PATH for both interactive and non-interactive shells
+      cat >> ~/.profile <<'EOF'
+      export BUN_INSTALL="$HOME/.bun"
+      export PATH="$HOME/.local/bin:$BUN_INSTALL/bin:$PATH"
+      EOF
+      cat >> ~/.bashrc <<'EOF'
+      export BUN_INSTALL="$HOME/.bun"
+      export PATH="$HOME/.local/bin:$BUN_INSTALL/bin:$PATH"
+      EOF
+
+message: |
+  HAL9999 VM ready!
+  Workspace: /workspace
+  User: agent

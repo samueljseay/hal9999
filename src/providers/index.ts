@@ -1,11 +1,8 @@
 import type { Provider } from "./types.ts";
 import { DigitalOceanProvider } from "./digitalocean.ts";
+import { LimaProvider } from "./lima.ts";
 
-export type ProviderType = "digitalocean";
-
-const PROVIDER_ENV_KEYS: Record<ProviderType, string> = {
-  digitalocean: "DO_API_TOKEN",
-};
+export type ProviderType = "digitalocean" | "lima";
 
 export function createProvider(
   type: ProviderType,
@@ -13,13 +10,18 @@ export function createProvider(
 ): Provider {
   switch (type) {
     case "digitalocean": {
-      const apiKey = config?.apiKey ?? process.env[PROVIDER_ENV_KEYS[type]];
+      const envKey = "DO_API_TOKEN";
+      const apiKey = config?.apiKey ?? process.env[envKey];
       if (!apiKey) {
         throw new Error(
-          `Missing API token. Set ${PROVIDER_ENV_KEYS[type]} in .env or pass config.apiKey`
+          `Missing API token. Set ${envKey} in .env or pass config.apiKey`
         );
       }
       return new DigitalOceanProvider({ apiKey });
+    }
+    case "lima": {
+      const templatePath = config?.templatePath ?? process.env.HAL_LIMA_TEMPLATE ?? "src/image/hal9999.yaml";
+      return new LimaProvider({ templatePath });
     }
     default:
       throw new Error(`Unknown provider: ${type}`);

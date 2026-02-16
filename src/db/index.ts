@@ -17,6 +17,7 @@ export function getDb(path = "data/hal9999.db"): Database {
   db = new Database(path, { create: true });
   db.exec("PRAGMA journal_mode = WAL");
   initSchema(db);
+  migrate(db);
   return db;
 }
 
@@ -25,12 +26,24 @@ export function closeDb(): void {
   db = null;
 }
 
+function migrate(db: Database): void {
+  const cols = db.query<{ name: string }, []>("PRAGMA table_info(vms)").all();
+  if (cols.length > 0 && !cols.some((c) => c.name === "ssh_port")) {
+    db.exec("ALTER TABLE vms ADD COLUMN ssh_port INTEGER");
+  }
+  if (cols.length > 0 && !cols.some((c) => c.name === "provider")) {
+    db.exec("ALTER TABLE vms ADD COLUMN provider TEXT NOT NULL DEFAULT 'digitalocean'");
+  }
+}
+
 function initSchema(db: Database): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS vms (
       id          TEXT PRIMARY KEY,
       label       TEXT NOT NULL,
+      provider    TEXT NOT NULL DEFAULT 'digitalocean',
       ip          TEXT,
+      ssh_port    INTEGER,
       status      TEXT NOT NULL DEFAULT 'provisioning',
       task_id     TEXT,
       snapshot_id TEXT NOT NULL,

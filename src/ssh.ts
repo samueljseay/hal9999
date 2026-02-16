@@ -1,6 +1,7 @@
 export interface SshExecOptions {
   host: string;
   user?: string;
+  port?: number;
   command: string;
   env?: Record<string, string>;
   timeoutMs?: number;
@@ -25,16 +26,7 @@ export async function sshExec(opts: SshExecOptions): Promise<SshExecResult> {
     remoteCommand = `bash -c ${shellEscape(`${exports}; ${remoteCommand}`)}`;
   }
 
-  const args = [
-    "ssh",
-    "-o", "StrictHostKeyChecking=no",
-    "-o", "UserKnownHostsFile=/dev/null",
-    "-o", "ConnectTimeout=10",
-    "-o", "BatchMode=yes",
-    "-o", "LogLevel=ERROR",
-    `${user}@${opts.host}`,
-    remoteCommand,
-  ];
+  const args = buildSshArgs(user, opts.host, opts.port, remoteCommand);
 
   const proc = Bun.spawn(args, {
     stdout: "pipe",
@@ -70,34 +62,24 @@ export async function sshExec(opts: SshExecOptions): Promise<SshExecResult> {
 export async function waitForSsh(
   host: string,
   user = "agent",
-  timeoutMs = 180_000
+  timeoutMs = 180_000,
+  port?: number
 ): Promise<void> {
   const start = Date.now();
   let attempt = 0;
+  const target = port ? `${host}:${port}` : host;
   while (Date.now() - start < timeoutMs) {
     attempt++;
     const elapsed = Math.round((Date.now() - start) / 1000);
-    console.log(`SSH probe ${attempt} to ${host} (${elapsed}s elapsed)...`);
+    console.log(`SSH probe ${attempt} to ${target} (${elapsed}s elapsed)...`);
 
-    const proc = Bun.spawn(
-      [
-        "ssh",
-        "-o", "StrictHostKeyChecking=no",
-        "-o", "UserKnownHostsFile=/dev/null",
-        "-o", "ConnectTimeout=10",
-        "-o", "BatchMode=yes",
-        "-o", "LogLevel=ERROR",
-        `${user}@${host}`,
-        "echo ok",
-      ],
-      { stdout: "pipe", stderr: "pipe" }
-    );
+    const args = buildSshArgs(user, host, port, "echo ok");
+    const proc = Bun.spawn(args, { stdout: "pipe", stderr: "pipe" });
 
-    const stdout = await new Response(proc.stdout).text();
     const stderr = await new Response(proc.stderr).text();
     const exitCode = await proc.exited;
     if (exitCode === 0) {
-      console.log(`SSH ready on ${host}`);
+      console.log(`SSH ready on ${target}`);
       return;
     }
 
@@ -108,7 +90,7 @@ export async function waitForSsh(
 
     await new Promise((r) => setTimeout(r, 5_000));
   }
-  throw new Error(`SSH on ${host} not reachable within ${timeoutMs / 1000}s`);
+  throw new Error(`SSH on ${target} not reachable within ${timeoutMs / 1000}s`);
 }
 
 export interface SshExecStreamingOptions extends SshExecOptions {
@@ -126,16 +108,7 @@ export async function sshExecStreaming(opts: SshExecStreamingOptions): Promise<S
     remoteCommand = `bash -c ${shellEscape(`${exports}; ${remoteCommand}`)}`;
   }
 
-  const args = [
-    "ssh",
-    "-o", "StrictHostKeyChecking=no",
-    "-o", "UserKnownHostsFile=/dev/null",
-    "-o", "ConnectTimeout=10",
-    "-o", "BatchMode=yes",
-    "-o", "LogLevel=ERROR",
-    `${user}@${opts.host}`,
-    remoteCommand,
-  ];
+  const args = buildSshArgs(user, opts.host, opts.port, remoteCommand);
 
   const proc = Bun.spawn(args, {
     stdout: "pipe",
@@ -191,6 +164,22 @@ export async function sshExecStreaming(opts: SshExecStreamingOptions): Promise<S
     stdout: stdoutChunks.join(""),
     stderr: stderrChunks.join(""),
   };
+}
+
+function buildSshArgs(user: string, host: string, port: number | undefined, command: string): string[] {
+  const args = [
+    "ssh",
+    "-o", "StrictHostKeyChecking=no",
+    "-o", "UserKnownHostsFile=/dev/null",
+    "-o", "ConnectTimeout=10",
+    "-o", "BatchMode=yes",
+    "-o", "LogLevel=ERROR",
+  ];
+  if (port) {
+    args.push("-p", String(port));
+  }
+  args.push(`${user}@${host}`, command);
+  return args;
 }
 
 function shellEscape(s: string): string {

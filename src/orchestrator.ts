@@ -1,7 +1,7 @@
 import type { Database } from "bun:sqlite";
-import type { Provider } from "./providers/types.ts";
 import type { PoolConfig } from "./pool/types.ts";
 import type { TaskRow } from "./db/types.ts";
+import type { AgentConfig } from "./agents/types.ts";
 import { VMPoolManager } from "./pool/manager.ts";
 import { TaskManager } from "./tasks/manager.ts";
 import { sshExec, sshExecStreaming, waitForSsh } from "./ssh.ts";
@@ -9,13 +9,7 @@ import { createLogWriter } from "./logs.ts";
 
 export interface OrchestratorConfig {
   pool: PoolConfig;
-  claudeAuth: {
-    type: "oauth";
-    token: string;
-  } | {
-    type: "api-key";
-    key: string;
-  };
+  agent: AgentConfig;
 }
 
 export class Orchestrator {
@@ -23,8 +17,8 @@ export class Orchestrator {
   readonly tasks: TaskManager;
   private config: OrchestratorConfig;
 
-  constructor(db: Database, provider: Provider, config: OrchestratorConfig) {
-    this.pool = new VMPoolManager(db, provider, config.pool);
+  constructor(db: Database, config: OrchestratorConfig) {
+    this.pool = new VMPoolManager(db, config.pool);
     this.tasks = new TaskManager(db);
     this.config = config;
   }
@@ -51,8 +45,9 @@ export class Orchestrator {
 
   private async executeTask(taskId: string, repoUrl: string, context: string): Promise<void> {
     const log = createLogWriter(taskId);
+    const agent = this.config.agent;
     log.writeHeader(`task ${taskId}`);
-    log.append(`Repo: ${repoUrl}\nContext: ${context}\n`);
+    log.append(`Repo: ${repoUrl}\nContext: ${context}\nAgent: ${agent.name}\n`);
 
     let vm;
     try {
@@ -63,23 +58,27 @@ export class Orchestrator {
       log.append(`VM ${vm.id} assigned (${vm.ip})\n`);
 
       // Wait for SSH
+      const sshPort = vm.ssh_port ?? undefined;
       log.writeHeader("waiting for SSH");
-      await waitForSsh(vm.ip!);
+      await waitForSsh(vm.ip!, "agent", 180_000, sshPort);
       log.append(`SSH ready\n`);
 
       // Clean workspace (VM may be reused from warm pool)
       await sshExec({
         host: vm.ip!,
+        port: sshPort,
         command: "rm -rf /workspace/*",
         timeoutMs: 30_000,
       });
 
       // Clone the repo
       const repoName = extractRepoName(repoUrl);
+      const workdir = `/workspace/${repoName}`;
       log.writeHeader("cloning repo");
       const cloneResult = await sshExecStreaming({
         host: vm.ip!,
-        command: `git clone ${repoUrl} /workspace/${repoName}`,
+        port: sshPort,
+        command: `git clone ${repoUrl} ${workdir}`,
         timeoutMs: 120_000,
         onChunk: (text) => log.append(text),
       });
@@ -87,14 +86,22 @@ export class Orchestrator {
         throw new Error(`git clone failed: ${cloneResult.stderr}`);
       }
 
-      // Run the Claude agent
+      // Run the agent
       this.tasks.markRunning(taskId);
-      log.writeHeader("running Claude agent");
+      const agentCommand = expandAgentCommand(agent.command, { context, workdir });
+      log.writeHeader(`running ${agent.name} agent`);
+      const agentEnv = {
+        // Ensure tools installed to user-local paths are available.
+        // Use absolute path — $HOME won't expand inside single-quoted SSH env.
+        PATH: "/home/agent/.local/bin:/home/agent/.bun/bin:/usr/local/bin:/usr/bin:/bin",
+        ...agent.env,
+      };
       const agentResult = await sshExecStreaming({
         host: vm.ip!,
-        command: `cd /workspace/${repoName} && claude -p ${shellEscapeArg(context)} --dangerously-skip-permissions`,
-        env: this.getClaudeEnv(),
-        timeoutMs: 600_000,
+        port: sshPort,
+        command: `cd ${workdir} && ${agentCommand}`,
+        env: agentEnv,
+        timeoutMs: agent.timeoutMs ?? 600_000,
         onChunk: (text) => log.append(text),
       });
 
@@ -124,14 +131,6 @@ export class Orchestrator {
     }
   }
 
-  private getClaudeEnv(): Record<string, string> {
-    const auth = this.config.claudeAuth;
-    if (auth.type === "oauth") {
-      return { CLAUDE_CODE_OAUTH_TOKEN: auth.token };
-    }
-    return { ANTHROPIC_API_KEY: auth.key };
-  }
-
   async recover(): Promise<void> {
     console.log("Running pool reconciliation...");
     const result = await this.pool.reconcile();
@@ -150,4 +149,14 @@ function extractRepoName(repoUrl: string): string {
 
 function shellEscapeArg(s: string): string {
   return `'${s.replace(/'/g, "'\\''")}'`;
+}
+
+/** Expand {{context}} and {{workdir}} in an agent command template */
+function expandAgentCommand(
+  template: string,
+  vars: { context: string; workdir: string }
+): string {
+  return template
+    .replace(/\{\{context\}\}/g, shellEscapeArg(vars.context))
+    .replace(/\{\{workdir\}\}/g, vars.workdir);
 }

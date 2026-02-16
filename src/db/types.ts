@@ -9,7 +9,9 @@ export type VmStatus =
 export interface VmRow {
   id: string;
   label: string;
+  provider: string;
   ip: string | null;
+  ssh_port: number | null;
   status: VmStatus;
   task_id: string | null;
   snapshot_id: string;

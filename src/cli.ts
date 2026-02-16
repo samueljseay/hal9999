@@ -1,9 +1,11 @@
 import { parseArgs } from "node:util";
-import { createProvider } from "./providers/index.ts";
+import { createProvider, type ProviderType } from "./providers/index.ts";
+import type { ProviderSlot } from "./pool/types.ts";
 import type { DigitalOceanProvider } from "./providers/digitalocean.ts";
 import { getDb } from "./db/index.ts";
 import { Orchestrator } from "./orchestrator.ts";
 import { tailLog } from "./logs.ts";
+import { resolveAgent } from "./agents/presets.ts";
 
 const HELP = `
 hal9999 cli — manage VMs for agent workers
@@ -46,7 +48,10 @@ Options:
   --description <desc>    Snapshot description
   --query <text>          Filter for images (e.g. "debian", "ubuntu")
   --wait                  Wait for instance/snapshot to be ready
-  --provider <name>       Provider name (default: digitalocean)
+  --provider <name,...>    Provider(s): digitalocean, lima — comma-separated for
+                          mixed pools, first has highest priority (default: digitalocean)
+  --agent <name|cmd>      Agent to run: claude, opencode, goose, or a custom command
+                          with {{context}} placeholder (default: claude)
   --ssh-key <id>          SSH key ID to inject
   --repo <url>            Repository URL (for task create)
   --context <text>        Task context/instructions (for task create)
@@ -67,6 +72,7 @@ function parseCliArgs() {
       description: { type: "string" },
       wait: { type: "boolean", default: false },
       provider: { type: "string", default: "digitalocean" },
+      agent: { type: "string", default: "claude" },
       repo: { type: "string" },
       context: { type: "string" },
       status: { type: "string" },
@@ -82,35 +88,50 @@ function parseCliArgs() {
   };
 }
 
-function getOrchestrator(args: ReturnType<typeof parseCliArgs>): Orchestrator {
-  const provider = createProvider(args.provider as "digitalocean");
-  const db = getDb();
+function buildProviderSlots(args: ReturnType<typeof parseCliArgs>): ProviderSlot[] {
+  // --provider accepts comma-separated list: "lima,digitalocean"
+  // First provider gets priority 0, second gets 1, etc.
+  const providerNames = (args.provider ?? "digitalocean").split(",").map((s) => s.trim()) as ProviderType[];
 
-  const snapshotId = process.env.HAL_SNAPSHOT_ID;
-  if (!snapshotId) {
-    console.error("Error: HAL_SNAPSHOT_ID is required in .env");
-    process.exit(1);
-  }
+  return providerNames.map((name, i) => {
+    const provider = createProvider(name);
 
-  const oauthToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!oauthToken && !apiKey) {
-    console.error("Error: CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY is required in .env");
-    process.exit(1);
-  }
+    // Per-provider config from env, with fallbacks to global vars
+    const prefix = name === "digitalocean" ? "DO" : name.toUpperCase();
+    const snapshotId = name === "lima"
+      ? (process.env.HAL_LIMA_TEMPLATE ?? "src/image/hal9999.yaml")
+      : (process.env[`HAL_${prefix}_SNAPSHOT_ID`] ?? process.env.HAL_SNAPSHOT_ID);
 
-  return new Orchestrator(db, provider, {
-    pool: {
+    if (!snapshotId) {
+      console.error(`Error: HAL_SNAPSHOT_ID (or HAL_${prefix}_SNAPSHOT_ID) is required for ${name}`);
+      process.exit(1);
+    }
+
+    return {
+      name,
+      provider,
       snapshotId,
-      region: process.env.HAL_REGION ?? args.region!,
-      plan: process.env.HAL_PLAN ?? args.plan!,
-      maxPoolSize: parseInt(process.env.HAL_MAX_POOL_SIZE ?? "5", 10),
+      region: process.env[`HAL_${prefix}_REGION`] ?? process.env.HAL_REGION ?? args.region!,
+      plan: process.env[`HAL_${prefix}_PLAN`] ?? process.env.HAL_PLAN ?? args.plan!,
+      maxPoolSize: parseInt(process.env[`HAL_${prefix}_MAX_POOL_SIZE`] ?? process.env.HAL_MAX_POOL_SIZE ?? "5", 10),
+      priority: i,
       sshKeyIds: process.env.HAL_SSH_KEY_ID ? [process.env.HAL_SSH_KEY_ID] : undefined,
+    };
+  });
+}
+
+function getOrchestrator(args: ReturnType<typeof parseCliArgs>): Orchestrator {
+  const db = getDb();
+  const slots = buildProviderSlots(args);
+  const agentName = args.agent ?? process.env.HAL_AGENT ?? "claude";
+  const agent = resolveAgent(agentName);
+
+  return new Orchestrator(db, {
+    pool: {
+      slots,
       idleTimeoutMs: parseInt(process.env.HAL_IDLE_TIMEOUT_S ?? "0", 10) * 1000,
     },
-    claudeAuth: oauthToken
-      ? { type: "oauth", token: oauthToken }
-      : { type: "api-key", key: apiKey! },
+    agent,
   });
 }
 
@@ -238,6 +259,12 @@ async function main() {
         console.log(`  Ready:        ${stats.ready}`);
         console.log(`  Assigned:     ${stats.assigned}`);
         console.log(`  Total active: ${stats.total}`);
+        if (Object.keys(stats.byProvider).length > 0) {
+          console.log("  By provider:");
+          for (const [name, count] of Object.entries(stats.byProvider)) {
+            console.log(`    ${name}: ${count}`);
+          }
+        }
         break;
       }
 
@@ -271,8 +298,9 @@ async function main() {
     return;
   }
 
-  // --- Infrastructure commands (existing) ---
-  const provider = createProvider(args.provider as "digitalocean");
+  // --- Infrastructure commands (single-provider, not pool-aware) ---
+  const providerType = ((args.provider ?? "digitalocean").split(",")[0]?.trim() ?? "digitalocean") as ProviderType;
+  const provider = createProvider(providerType);
 
   switch (args.command) {
     case "create": {
