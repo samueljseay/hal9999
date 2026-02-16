@@ -23,6 +23,10 @@ Hardware-independent agentic coding system. Spawns VMs with coding agents that w
 - `src/tasks/manager.ts` — Task lifecycle manager
 - `src/ssh.ts` — SSH command execution (blocking + streaming) with env forwarding
 - `src/logs.ts` — File-based log writer + tail reader for streaming output
+- `src/events/types.ts` — JSONL event protocol types (TaskEvent union, EventEnvelope)
+- `src/events/writer.ts` — Per-task JSONL event writer (`data/events/<task-id>.jsonl`)
+- `src/events/reader.ts` — Event reader (readEvents) and async generator tailer (tailEvents)
+- `src/events/index.ts` — Barrel export for events module
 - `src/agents/types.ts` — AgentConfig type (name, command template, env, timeout)
 - `src/agents/presets.ts` — Built-in agent presets (claude, opencode, goose, custom) and resolver
 - `src/orchestrator.ts` — Wires pool + tasks + SSH into startTask/runTask flow (agent-agnostic)
@@ -40,6 +44,7 @@ Hardware-independent agentic coding system. Spawns VMs with coding agents that w
 - SSH env forwarding uses `bash -c 'export KEY=val; command'` (not `env` — shell builtins like `cd` need bash)
 - Warm pool: VMs are returned to pool after task completion, reaped after `HAL_IDLE_TIMEOUT_S`
 - Streaming output: tasks write to `data/logs/<task-id>.log`, CLI tails with 250ms polling
+- JSONL events: structured event stream per task in `data/events/<task-id>.jsonl`. Orchestrator emits typed events (task_start, vm_acquired, phase, output, task_end). `task events` CLI command for pretty-printed or raw JSONL output.
 - Lima provider: `--provider lima` flag, uses `limactl` CLI, SSH via localhost:<dynamic-port>, template path as snapshotId
 - Lima VMs use `agent` user to match DO golden image conventions
 - Mixed pools: `--provider lima,digitalocean` — comma-separated, first has highest priority. Each VM tracks its provider in DB. Pool fills local first, overflows to cloud.

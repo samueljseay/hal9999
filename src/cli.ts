@@ -5,6 +5,8 @@ import type { DigitalOceanProvider } from "./providers/digitalocean.ts";
 import { getDb } from "./db/index.ts";
 import { Orchestrator } from "./orchestrator.ts";
 import { tailLog } from "./logs.ts";
+import { tailEvents, readEvents } from "./events/index.ts";
+import type { EventEnvelope } from "./events/index.ts";
 import { resolveAgent } from "./agents/presets.ts";
 
 const HELP = `
@@ -28,6 +30,7 @@ Infrastructure Commands:
 Task Commands:
   task create  Create a task on a new VM (streams output)
   task watch   Attach to a running (or finished) task's output
+  task events  Stream structured JSONL events (--raw for machine output)
   task list    List all tasks
   task get     Get task details
 
@@ -77,6 +80,7 @@ function parseCliArgs() {
       context: { type: "string" },
       status: { type: "string" },
       "ssh-key": { type: "string" },
+      raw: { type: "boolean", default: false },
     },
   });
 
@@ -84,6 +88,7 @@ function parseCliArgs() {
     command: positionals[0],
     subcommand: positionals[1],
     id: positionals[1], // also used as ID for single-arg commands
+    subId: positionals[2], // ID arg for two-level commands (e.g. task watch <id>)
     ...values,
   };
 }
@@ -206,6 +211,76 @@ async function main() {
         break;
       }
 
+      case "events": {
+        const eventsId = args.subId;
+        if (!eventsId) {
+          console.error("Error: task ID is required. Usage: task events <task-id>");
+          process.exit(1);
+        }
+        const evTask = orch.tasks.getTask(eventsId);
+        if (!evTask) {
+          console.error(`Task ${eventsId} not found`);
+          process.exit(1);
+        }
+
+        if (args.raw) {
+          // Raw mode — for finished tasks, dump the file; for running, tail raw JSONL
+          if (evTask.status === "completed" || evTask.status === "failed") {
+            for (const env of readEvents(eventsId)) {
+              console.log(JSON.stringify(env));
+            }
+          } else {
+            const ac = new AbortController();
+            process.on("SIGINT", () => { ac.abort(); process.exit(0); });
+            for await (const env of tailEvents(eventsId, () => {
+              const t = orch.tasks.getTask(eventsId);
+              return t?.status === "completed" || t?.status === "failed";
+            }, ac.signal)) {
+              console.log(JSON.stringify(env));
+            }
+          }
+        } else {
+          // Pretty-print mode
+          const printEvent = (env: EventEnvelope) => {
+            const ts = env.timestamp.split("T")[1]?.replace("Z", "") ?? env.timestamp;
+            const e = env.event;
+            switch (e.type) {
+              case "task_start":
+                console.log(`[${ts}] TASK START  repo=${e.repoUrl} agent=${e.agent}`);
+                break;
+              case "vm_acquired":
+                console.log(`[${ts}] VM ACQUIRED vm=${e.vmId} provider=${e.provider} ip=${e.ip}`);
+                break;
+              case "phase":
+                console.log(`[${ts}] PHASE       ${e.name}`);
+                break;
+              case "output":
+                process.stdout.write(e.text);
+                break;
+              case "task_end":
+                console.log(`\n[${ts}] TASK END    status=${e.status} exit=${e.exitCode ?? "?"}${e.error ? ` error=${e.error}` : ""}`);
+                break;
+            }
+          };
+
+          if (evTask.status === "completed" || evTask.status === "failed") {
+            for (const env of readEvents(eventsId)) {
+              printEvent(env);
+            }
+          } else {
+            const ac = new AbortController();
+            process.on("SIGINT", () => { ac.abort(); process.exit(0); });
+            for await (const env of tailEvents(eventsId, () => {
+              const t = orch.tasks.getTask(eventsId);
+              return t?.status === "completed" || t?.status === "failed";
+            }, ac.signal)) {
+              printEvent(env);
+            }
+          }
+        }
+        break;
+      }
+
       case "list": {
         const tasks = orch.tasks.listTasks(args.status as any);
         if (tasks.length === 0) {
@@ -241,7 +316,7 @@ async function main() {
 
       default:
         console.error(`Unknown task command: ${args.subcommand}`);
-        console.log('Available: task create, task watch, task list, task get');
+        console.log('Available: task create, task watch, task events, task list, task get');
         process.exit(1);
     }
     return;

@@ -6,6 +6,7 @@ import { VMPoolManager } from "./pool/manager.ts";
 import { TaskManager } from "./tasks/manager.ts";
 import { sshExec, sshExecStreaming, waitForSsh } from "./ssh.ts";
 import { createLogWriter } from "./logs.ts";
+import { createEventWriter } from "./events/index.ts";
 
 export interface OrchestratorConfig {
   pool: PoolConfig;
@@ -45,21 +46,27 @@ export class Orchestrator {
 
   private async executeTask(taskId: string, repoUrl: string, context: string): Promise<void> {
     const log = createLogWriter(taskId);
+    const events = createEventWriter(taskId);
     const agent = this.config.agent;
+
     log.writeHeader(`task ${taskId}`);
     log.append(`Repo: ${repoUrl}\nContext: ${context}\nAgent: ${agent.name}\n`);
+    events.emit({ type: "task_start", repoUrl, context, agent: agent.name });
 
     let vm;
     try {
       // Acquire a VM
       log.writeHeader("acquiring VM");
+      events.emit({ type: "phase", name: "vm_acquire" });
       vm = await this.pool.acquireVm(taskId);
       this.tasks.assignTask(taskId, vm.id);
       log.append(`VM ${vm.id} assigned (${vm.ip})\n`);
+      events.emit({ type: "vm_acquired", vmId: vm.id, provider: vm.provider, ip: vm.ip ?? "" });
 
       // Wait for SSH
       const sshPort = vm.ssh_port ?? undefined;
       log.writeHeader("waiting for SSH");
+      events.emit({ type: "phase", name: "ssh_wait" });
       await waitForSsh(vm.ip!, "agent", 180_000, sshPort);
       log.append(`SSH ready\n`);
 
@@ -75,12 +82,16 @@ export class Orchestrator {
       const repoName = extractRepoName(repoUrl);
       const workdir = `/workspace/${repoName}`;
       log.writeHeader("cloning repo");
+      events.emit({ type: "phase", name: "clone" });
       const cloneResult = await sshExecStreaming({
         host: vm.ip!,
         port: sshPort,
         command: `git clone ${repoUrl} ${workdir}`,
         timeoutMs: 120_000,
-        onChunk: (text) => log.append(text),
+        onChunk: (text) => {
+          log.append(text);
+          events.emit({ type: "output", stream: "stdout", text });
+        },
       });
       if (cloneResult.exitCode !== 0) {
         throw new Error(`git clone failed: ${cloneResult.stderr}`);
@@ -90,6 +101,7 @@ export class Orchestrator {
       this.tasks.markRunning(taskId);
       const agentCommand = expandAgentCommand(agent.command, { context, workdir });
       log.writeHeader(`running ${agent.name} agent`);
+      events.emit({ type: "phase", name: "agent_run" });
       const agentEnv = {
         // Ensure tools installed to user-local paths are available.
         // Use absolute path — $HOME won't expand inside single-quoted SSH env.
@@ -102,20 +114,26 @@ export class Orchestrator {
         command: `cd ${workdir} && ${agentCommand}`,
         env: agentEnv,
         timeoutMs: agent.timeoutMs ?? 600_000,
-        onChunk: (text) => log.append(text),
+        onChunk: (text) => {
+          log.append(text);
+          events.emit({ type: "output", stream: "stdout", text });
+        },
       });
 
       if (agentResult.exitCode === 0) {
         this.tasks.completeTask(taskId, agentResult.stdout, 0);
         log.append(`\nTask completed successfully\n`);
+        events.emit({ type: "task_end", status: "completed", exitCode: 0 });
       } else {
         this.tasks.failTask(taskId, agentResult.stderr || agentResult.stdout, agentResult.exitCode);
         log.append(`\nTask failed (exit ${agentResult.exitCode})\n`);
+        events.emit({ type: "task_end", status: "failed", exitCode: agentResult.exitCode, error: agentResult.stderr || agentResult.stdout });
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.tasks.failTask(taskId, message);
       log.append(`\nTask failed: ${message}\n`);
+      events.emit({ type: "task_end", status: "failed", exitCode: null, error: message });
     } finally {
       if (vm) {
         log.append(`Releasing VM ${vm.id}...\n`);
