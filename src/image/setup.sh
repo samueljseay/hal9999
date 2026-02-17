@@ -61,6 +61,16 @@ chown -R agent:agent /home/agent/.ssh
 chmod 700 /home/agent/.ssh
 chmod 600 /home/agent/.ssh/authorized_keys
 
+echo "==> Installing GitHub CLI (gh)"
+mkdir -p -m 755 /etc/apt/keyrings
+curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+  | tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null
+chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+  > /etc/apt/sources.list.d/github-cli.list
+apt-get update -qq
+apt-get install -y -qq gh
+
 echo "==> Cleaning up to minimize snapshot size"
 apt-get clean
 rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
@@ -70,6 +80,7 @@ echo "  git:  $(git --version)"
 echo "  node: $(node --version)"
 echo "  npm:  $(npm --version)"
 echo "  bun:  $(bun --version)"
+echo "  gh:   $(gh --version | head -1)"
 
 echo ""
 echo "Golden image setup complete."

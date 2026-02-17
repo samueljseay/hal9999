@@ -80,4 +80,12 @@ export class TaskManager {
       )
       .get() ?? null;
   }
+
+  getInFlightTasks(): TaskRow[] {
+    return this.db
+      .query<TaskRow, []>(
+        `SELECT * FROM tasks WHERE status IN ('running', 'assigned') ORDER BY created_at ASC`
+      )
+      .all();
+  }
 }

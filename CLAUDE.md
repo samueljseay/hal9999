@@ -45,7 +45,7 @@ Hardware-independent agentic coding system. Spawns VMs with coding agents that w
 - `src/events/index.ts` — Barrel export for events module
 - `src/agents/types.ts` — AgentConfig type (name, command template, install script, env, timeout)
 - `src/agents/presets.ts` — Built-in agent presets (claude, opencode, goose, custom) and resolver
-- `src/orchestrator.ts` — Wires pool + tasks + SSH into startTask/runTask flow (agent-agnostic)
+- `src/orchestrator.ts` — Fire-and-forget orchestrator: setup → nohup launch → poll → collect (agent-agnostic)
 - `src/image/setup.sh` — Golden image bootstrap script for DO (Debian 13)
 - `src/image/hal9999.yaml` — Lima VM template (Debian 13, local dev)
 
@@ -63,10 +63,14 @@ Hardware-independent agentic coding system. Spawns VMs with coding agents that w
 - Provider implementations must satisfy the `Provider` interface in `types.ts`
 - Agent-agnostic: orchestrator takes an `AgentConfig` with a command template + env vars. Built-in presets for claude, opencode, goose. Custom commands via `-a "my-cmd {{context}}"`.
 - Runtime agent install: `AgentConfig.install` is an idempotent shell script run before the agent command. Uses `command -v` guard to skip if already installed. Only PATH is forwarded (no API keys). VMs accumulate agents across warm-pool reuse.
-- Auth on VMs: pass API keys via SSH env forwarding, never bake into image
-- SSH env forwarding uses `bash -c 'export KEY=val; command'` (not `env` — shell builtins like `cd` need bash)
+- **Fire-and-forget execution**: orchestrator runs setup over SSH (clone, install agent), then uploads a wrapper script to `/workspace/.hal/run.sh` and launches it with `nohup`. SSH session ends, agent keeps running on the VM.
+- **`/workspace/.hal/` convention**: `run.sh` (wrapper), `output.log` (stdout/stderr), `done` (exit code sentinel), `result/` (diff-stat, patch).
+- **Poll-based output**: orchestrator polls VM every 5s — checks sentinel file + pulls incremental output via `tail -c +<offset>`. Writes to local `data/logs/<taskId>.log`. `hal logs` tails the local file unchanged.
+- **Recovery**: `recover()` finds `running` tasks and resumes poll+collect. `assigned` tasks (setup incomplete) are failed. Dead VMs → task failed.
+- **GITHUB_TOKEN**: set in `.env`, forwarded to agent env. Clone URL rewritten to `https://x-access-token:TOKEN@github.com/...`. Wrapper script configures `git credential.helper store` so agents can `git push`.
+- Auth on VMs: API keys baked into the wrapper script on the VM (not forwarded over persistent SSH). Never bake into image.
 - Warm pool: VMs are returned to pool after task completion, reaped after `HAL_IDLE_TIMEOUT_S`
-- Streaming output: tasks write to `data/logs/<task-id>.log`, CLI tails with 250ms polling
+- Streaming output: orchestrator pulls from VM to `data/logs/<task-id>.log`, CLI tails with 250ms polling
 - JSONL events: structured event stream per task in `data/events/<task-id>.jsonl`. Orchestrator emits typed events (task_start, vm_acquired, phase, output, task_end). `hal events <id>` for pretty-printed or `--raw` JSONL output.
 - Lima provider: `-p lima` flag, uses `limactl` CLI, SSH via localhost:<dynamic-port>, template path as snapshotId
 - Lima VMs use `agent` user to match DO golden image conventions
