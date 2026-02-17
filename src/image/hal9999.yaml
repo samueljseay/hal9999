@@ -82,9 +82,7 @@ provision:
       # Install bun
       curl -fsSL https://bun.sh/install | bash
 
-      # Agent-agnostic: install Claude Code for now, but the agent
-      # command is determined by the orchestrator, not the image.
-      curl -fsSL https://claude.ai/install.sh | bash || true
+      # Agent-agnostic: agents are installed at runtime by the orchestrator.
 
       # Set up PATH for both interactive and non-interactive shells
       cat >> ~/.profile <<'EOF'

@@ -11,6 +11,7 @@ export function claudeAgent(opts: {
   return {
     name: "claude",
     command: "claude -p {{context}} --dangerously-skip-permissions",
+    install: "command -v claude > /dev/null || curl -fsSL https://claude.ai/install.sh | bash",
     env: opts.oauthToken
       ? { CLAUDE_CODE_OAUTH_TOKEN: opts.oauthToken }
       : { ANTHROPIC_API_KEY: opts.apiKey! },
@@ -24,6 +25,7 @@ export function opencodeAgent(opts: {
   return {
     name: "opencode",
     command: "opencode run --prompt {{context}}",
+    install: "command -v opencode > /dev/null || curl -fsSL https://opencode.ai/install | bash",
     env: {
       ANTHROPIC_API_KEY: opts.apiKey,
       ...(opts.provider ? { OPENCODE_PROVIDER: opts.provider } : {}),
@@ -32,16 +34,27 @@ export function opencodeAgent(opts: {
 }
 
 export function gooseAgent(opts: {
-  apiKey: string;
+  apiKey?: string;
+  oauthToken?: string;
   provider?: string;
 }): AgentConfig {
+  const provider = opts.provider ?? (opts.oauthToken ? "claude-code" : "anthropic");
+  const useClaude = provider === "claude-code";
+
+  const gooseInstall = "command -v goose > /dev/null || (sudo apt-get update -qq && sudo apt-get install -y -qq libxcb1 && curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | CONFIGURE=false bash)";
+  const claudeInstall = "command -v claude > /dev/null || curl -fsSL https://claude.ai/install.sh | bash";
+
   return {
     name: "goose",
-    command: "goose run --text {{context}}",
-    env: {
-      ANTHROPIC_API_KEY: opts.apiKey,
-      ...(opts.provider ? { GOOSE_PROVIDER: opts.provider } : {}),
-    },
+    command: useClaude
+      ? "goose run --no-session --provider claude-code --model claude-sonnet-4-5 --text {{context}}"
+      : "goose run --no-session --provider anthropic --model claude-sonnet-4-5 --text {{context}}",
+    install: useClaude
+      ? `${gooseInstall} && ${claudeInstall}`
+      : gooseInstall,
+    env: useClaude
+      ? { CLAUDE_CODE_OAUTH_TOKEN: opts.oauthToken! }
+      : { ANTHROPIC_API_KEY: opts.apiKey! },
   };
 }
 
@@ -80,10 +93,13 @@ export function resolveAgent(
       return opencodeAgent({ apiKey: env.ANTHROPIC_API_KEY });
 
     case "goose":
-      if (!env.ANTHROPIC_API_KEY) {
-        throw new Error("Goose agent requires ANTHROPIC_API_KEY");
+      if (!env.ANTHROPIC_API_KEY && !env.CLAUDE_CODE_OAUTH_TOKEN) {
+        throw new Error("Goose agent requires ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN");
       }
-      return gooseAgent({ apiKey: env.ANTHROPIC_API_KEY });
+      return gooseAgent({
+        apiKey: env.ANTHROPIC_API_KEY,
+        oauthToken: env.CLAUDE_CODE_OAUTH_TOKEN,
+      });
 
     default:
       // Treat as a custom command string

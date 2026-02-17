@@ -13,6 +13,13 @@ export interface AgentConfig {
   /** Environment variables forwarded to the VM via SSH */
   env?: Record<string, string>;
 
+  /**
+   * Idempotent install script that runs on the VM before the agent command.
+   * Should use `command -v <binary>` guard to skip if already installed.
+   * Only PATH is forwarded during install (no API keys).
+   */
+  install?: string;
+
   /** Agent command timeout in ms (default: 600_000 = 10 min) */
   timeoutMs?: number;
 }

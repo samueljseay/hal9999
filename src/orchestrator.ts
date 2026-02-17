@@ -97,6 +97,29 @@ export class Orchestrator {
         throw new Error(`git clone failed: ${cloneResult.stderr}`);
       }
 
+      // Install agent (if install script provided)
+      if (agent.install) {
+        log.writeHeader(`installing ${agent.name} agent`);
+        events.emit({ type: "phase", name: "agent_install" });
+        const installEnv = {
+          PATH: "/home/agent/.local/bin:/home/agent/.bun/bin:/usr/local/bin:/usr/bin:/bin",
+        };
+        const installResult = await sshExecStreaming({
+          host: vm.ip!,
+          port: sshPort,
+          command: agent.install,
+          env: installEnv,
+          timeoutMs: 300_000, // 5 minutes
+          onChunk: (text) => {
+            log.append(text);
+            events.emit({ type: "output", stream: "stdout", text });
+          },
+        });
+        if (installResult.exitCode !== 0) {
+          throw new Error(`Agent install failed (exit ${installResult.exitCode}): ${installResult.stderr || installResult.stdout}`);
+        }
+      }
+
       // Run the agent
       this.tasks.markRunning(taskId);
       const agentCommand = expandAgentCommand(agent.command, { context, workdir });

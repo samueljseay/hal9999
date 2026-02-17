@@ -11,6 +11,22 @@ Hardware-independent agentic coding system. Spawns VMs with coding agents that w
 
 ## Project Structure
 
+### CLI (`hal` binary)
+- `bin/hal` — Shebang entry point (`#!/usr/bin/env bun`)
+- `src/cli.ts` — Re-export of `src/cli/index.ts` (backward compat entry)
+- `src/cli/index.ts` — Command router + backward-compat aliases (`task create` → `run`, etc.)
+- `src/cli/run.ts` — `hal run <repo> -m "msg"` — flagship command
+- `src/cli/ps.ts` — `hal ps` — list tasks with short IDs
+- `src/cli/logs.ts` — `hal logs <id>` — stream task output
+- `src/cli/events.ts` — `hal events <id>` — structured JSONL events
+- `src/cli/show.ts` — `hal show <id>` — full task details
+- `src/cli/pool.ts` — `hal pool [ls|sync]` — pool management
+- `src/cli/vm.ts` — `hal vm <cmd>` — infrastructure commands
+- `src/cli/context.ts` — Lazy db/taskManager/poolManager/orchestrator factories
+- `src/cli/resolve.ts` — Short ID prefix → full UUID resolution
+- `src/cli/help.ts` — Help text
+
+### Core
 - `src/providers/types.ts` — Provider interface and shared types
 - `src/providers/digitalocean.ts` — DigitalOcean API implementation
 - `src/providers/lima.ts` — Lima (local macOS VM) implementation
@@ -27,25 +43,32 @@ Hardware-independent agentic coding system. Spawns VMs with coding agents that w
 - `src/events/writer.ts` — Per-task JSONL event writer (`data/events/<task-id>.jsonl`)
 - `src/events/reader.ts` — Event reader (readEvents) and async generator tailer (tailEvents)
 - `src/events/index.ts` — Barrel export for events module
-- `src/agents/types.ts` — AgentConfig type (name, command template, env, timeout)
+- `src/agents/types.ts` — AgentConfig type (name, command template, install script, env, timeout)
 - `src/agents/presets.ts` — Built-in agent presets (claude, opencode, goose, custom) and resolver
 - `src/orchestrator.ts` — Wires pool + tasks + SSH into startTask/runTask flow (agent-agnostic)
 - `src/image/setup.sh` — Golden image bootstrap script for DO (Debian 13)
 - `src/image/hal9999.yaml` — Lima VM template (Debian 13, local dev)
-- `src/cli.ts` — CLI entry point
 
 ## Conventions
 
 - Bun auto-loads `.env` — no dotenv
 - Use `bun:test` for tests
+- **CLI binary**: `hal` (via `bun link`). Entry: `bin/hal` → `src/cli/index.ts`. Old `bun run src/cli.ts` still works.
+- **Default provider: `lima`** — local-first, zero-cost. Override with `-p do` or `HAL_DEFAULT_PROVIDER=digitalocean`.
+- **Repo shorthand**: `owner/repo` → `https://github.com/owner/repo`. Full URLs still work.
+- **Short IDs**: first 8 chars of UUID for display, prefix matching for lookups (`hal show a1b2`).
+- **Provider alias**: `do` accepted as shorthand for `digitalocean`.
+- **Lazy init**: read-only commands (`ps`, `logs`, `show`, `events`, `pool`, `pool ls`) only open SQLite. Only `run` and `pool sync` build the full orchestrator.
+- **Backward compat**: `task create/list/watch/get/events` still work but print deprecation hints.
 - Provider implementations must satisfy the `Provider` interface in `types.ts`
-- Agent-agnostic: orchestrator takes an `AgentConfig` with a command template + env vars. Built-in presets for claude, opencode, goose. Custom commands via `--agent "my-cmd {{context}}"`.
+- Agent-agnostic: orchestrator takes an `AgentConfig` with a command template + env vars. Built-in presets for claude, opencode, goose. Custom commands via `-a "my-cmd {{context}}"`.
+- Runtime agent install: `AgentConfig.install` is an idempotent shell script run before the agent command. Uses `command -v` guard to skip if already installed. Only PATH is forwarded (no API keys). VMs accumulate agents across warm-pool reuse.
 - Auth on VMs: pass API keys via SSH env forwarding, never bake into image
 - SSH env forwarding uses `bash -c 'export KEY=val; command'` (not `env` — shell builtins like `cd` need bash)
 - Warm pool: VMs are returned to pool after task completion, reaped after `HAL_IDLE_TIMEOUT_S`
 - Streaming output: tasks write to `data/logs/<task-id>.log`, CLI tails with 250ms polling
-- JSONL events: structured event stream per task in `data/events/<task-id>.jsonl`. Orchestrator emits typed events (task_start, vm_acquired, phase, output, task_end). `task events` CLI command for pretty-printed or raw JSONL output.
-- Lima provider: `--provider lima` flag, uses `limactl` CLI, SSH via localhost:<dynamic-port>, template path as snapshotId
+- JSONL events: structured event stream per task in `data/events/<task-id>.jsonl`. Orchestrator emits typed events (task_start, vm_acquired, phase, output, task_end). `hal events <id>` for pretty-printed or `--raw` JSONL output.
+- Lima provider: `-p lima` flag, uses `limactl` CLI, SSH via localhost:<dynamic-port>, template path as snapshotId
 - Lima VMs use `agent` user to match DO golden image conventions
-- Mixed pools: `--provider lima,digitalocean` — comma-separated, first has highest priority. Each VM tracks its provider in DB. Pool fills local first, overflows to cloud.
+- Mixed pools: `-p lima,digitalocean` — comma-separated, first has highest priority. Each VM tracks its provider in DB. Pool fills local first, overflows to cloud.
 - Per-provider env: `HAL_LIMA_MAX_POOL_SIZE`, `HAL_DO_SNAPSHOT_ID`, etc. Fall back to global `HAL_*` vars.

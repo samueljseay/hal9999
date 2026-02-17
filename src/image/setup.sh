@@ -35,10 +35,6 @@ echo "==> Installing bun"
 curl -fsSL https://bun.sh/install | bash
 cp /root/.bun/bin/bun /usr/local/bin/bun
 
-echo "==> Installing Claude Code (native)"
-curl -fsSL https://claude.ai/install.sh | bash
-cp /root/.local/bin/claude /usr/local/bin/claude
-
 echo "==> Creating agent user"
 useradd -m -s /bin/bash -G sudo agent
 echo "agent ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/agent
@@ -49,9 +45,6 @@ cp /root/.bun/bin/bun /home/agent/.bun/bin/bun
 chown -R agent:agent /home/agent/.bun
 echo 'export BUN_INSTALL="$HOME/.bun"' >> /home/agent/.bashrc
 echo 'export PATH="$BUN_INSTALL/bin:$PATH"' >> /home/agent/.bashrc
-
-# Install Claude Code for agent user
-su - agent -c 'curl -fsSL https://claude.ai/install.sh | bash'
 
 echo "==> Creating workspace directory"
 mkdir -p /workspace
@@ -77,7 +70,6 @@ echo "  git:  $(git --version)"
 echo "  node: $(node --version)"
 echo "  npm:  $(npm --version)"
 echo "  bun:  $(bun --version)"
-echo "  claude: $(claude --version)"
 
 echo ""
 echo "Golden image setup complete."
