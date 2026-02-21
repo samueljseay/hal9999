@@ -51,22 +51,39 @@ export class VMPoolManager {
   /** Provision a VM for a specific slot (used by ensureWarm) */
   private async provisionVmForSlot(slot: ProviderSlot): Promise<VmRow> {
     const label = `${this.config.labelPrefix ?? "hal9999"}-${Date.now()}`;
-    const instance = await slot.provider.createInstance({
-      region: slot.region,
-      plan: slot.plan,
-      snapshotId: slot.snapshotId,
-      label,
-      sshKeyIds: slot.sshKeyIds,
-    });
 
+    // Insert DB row first so the VM is visible during provisioning
     const now = new Date().toISOString();
     this.db.run(
       `INSERT INTO vms (id, label, provider, ip, ssh_port, status, snapshot_id, region, plan, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, 'provisioning', ?, ?, ?, ?, ?)`,
-      [instance.id, label, slot.name, instance.ip, instance.sshPort ?? null, slot.snapshotId, slot.region, slot.plan, now, now]
+       VALUES (?, ?, ?, NULL, NULL, 'provisioning', ?, ?, ?, ?, ?)`,
+      [label, label, slot.name, slot.snapshotId, slot.region, slot.plan, now, now]
     );
 
-    return this.getVm(instance.id)!;
+    try {
+      const instance = await slot.provider.createInstance({
+        region: slot.region,
+        plan: slot.plan,
+        snapshotId: slot.snapshotId,
+        label,
+        sshKeyIds: slot.sshKeyIds,
+      });
+
+      // Update with real ID and IP from provider
+      this.db.run(
+        `UPDATE vms SET id = ?, ip = ?, ssh_port = ?, updated_at = ? WHERE id = ?`,
+        [instance.id, instance.ip, instance.sshPort ?? null, new Date().toISOString(), label]
+      );
+
+      return this.getVm(instance.id)!;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.db.run(
+        `UPDATE vms SET status = 'error', error = ?, updated_at = ? WHERE id = ?`,
+        [message, new Date().toISOString(), label]
+      );
+      throw err;
+    }
   }
 
   async waitForVm(vmId: string, timeoutMs?: number): Promise<VmRow> {
