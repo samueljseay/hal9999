@@ -103,7 +103,7 @@ export class Orchestrator {
     // Acquire a VM
     log.writeHeader("acquiring VM");
     events.emit({ type: "phase", name: "vm_acquire" });
-    const vm = await this.pool.acquireVm(taskId);
+    const vm = await this.pool.acquireVm(taskId, (msg) => log.append(`${msg}\n`));
     this.tasks.assignTask(taskId, vm.id);
     log.append(`VM ${vm.id} assigned (${vm.ip})\n`);
     events.emit({ type: "vm_acquired", vmId: vm.id, provider: vm.provider, ip: vm.ip ?? "" });
@@ -113,7 +113,7 @@ export class Orchestrator {
     // Wait for SSH
     log.writeHeader("waiting for SSH");
     events.emit({ type: "phase", name: "ssh_wait" });
-    await waitForSsh(vm.ip!, "agent", 180_000, sshPort);
+    await waitForSsh(vm.ip!, "agent", 180_000, sshPort, (msg) => log.append(`${msg}\n`));
     log.append(`SSH ready\n`);
 
     // Clean workspace (VM may be reused from warm pool)

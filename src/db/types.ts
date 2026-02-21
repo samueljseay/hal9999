@@ -20,6 +20,7 @@ export interface VmRow {
   created_at: string;
   updated_at: string;
   error: string | null;
+  idle_since: string | null;
 }
 
 export type TaskStatus =

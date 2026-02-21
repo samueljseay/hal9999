@@ -38,13 +38,18 @@ export class VMPoolManager {
     return null;
   }
 
+  /** Provision a VM using the best available slot */
   async provisionVm(): Promise<VmRow> {
     const slot = this.pickSlot();
     if (!slot) {
       const total = this.config.slots.reduce((n, s) => n + s.maxPoolSize, 0);
       throw new Error(`All provider slots are at capacity (total max: ${total})`);
     }
+    return this.provisionVmForSlot(slot);
+  }
 
+  /** Provision a VM for a specific slot (used by ensureWarm) */
+  private async provisionVmForSlot(slot: ProviderSlot): Promise<VmRow> {
     const label = `${this.config.labelPrefix ?? "hal9999"}-${Date.now()}`;
     const instance = await slot.provider.createInstance({
       region: slot.region,
@@ -78,8 +83,14 @@ export class VMPoolManager {
     return this.getVm(vmId)!;
   }
 
-  async acquireVm(taskId: string): Promise<VmRow> {
+  async acquireVm(taskId: string, onProgress?: (message: string) => void): Promise<VmRow> {
+    const progress = onProgress ?? (() => {});
+
+    // Reap expired idle VMs before checking the warm pool
+    await this.reapIdleVms();
+
     // Try to find an existing ready VM (any provider)
+    progress("Checking warm pool for ready VM...");
     const free = this.db
       .query<VmRow, []>(
         `SELECT * FROM vms WHERE status = 'ready' AND task_id IS NULL LIMIT 1`
@@ -88,14 +99,18 @@ export class VMPoolManager {
 
     let vm: VmRow;
     if (free) {
+      progress(`Reusing warm VM ${free.id.slice(0, 8)} (${free.provider})`);
       vm = free;
     } else {
+      progress("No warm VM available, provisioning new one...");
       const provisioned = await this.provisionVm();
+      progress(`VM ${provisioned.id.slice(0, 8)} provisioning (${provisioned.provider})...`);
       try {
         vm = await this.waitForVm(provisioned.id);
+        progress(`VM ${vm.id.slice(0, 8)} ready (ip: ${vm.ip})`);
       } catch (err) {
         // Clean up the failed VM so it doesn't block the pool
-        console.log(`VM ${provisioned.id} failed to become ready, destroying...`);
+        progress(`VM ${provisioned.id.slice(0, 8)} failed to become ready, destroying...`);
         try {
           await this.destroyVm(provisioned.id);
         } catch {
@@ -109,11 +124,11 @@ export class VMPoolManager {
       }
     }
 
-    // Assign VM to task in a transaction
+    // Assign VM to task in a transaction (clear idle_since)
     const now = new Date().toISOString();
     this.db.transaction(() => {
       this.db.run(
-        `UPDATE vms SET status = 'assigned', task_id = ?, updated_at = ? WHERE id = ?`,
+        `UPDATE vms SET status = 'assigned', task_id = ?, idle_since = NULL, updated_at = ? WHERE id = ?`,
         [taskId, now, vm.id]
       );
       this.db.run(
@@ -122,26 +137,37 @@ export class VMPoolManager {
       );
     })();
 
+    // Top up the warm pool after consuming a VM
+    this.ensureWarm();
+
     return this.getVm(vm.id)!;
   }
 
   async releaseVm(vmId: string): Promise<void> {
-    const idleTimeout = this.config.idleTimeoutMs ?? 0;
+    const vm = this.getVm(vmId);
+    if (!vm) return;
+
+    const slot = this.slotsByName.get(vm.provider);
+    const idleTimeout = slot?.idleTimeoutMs ?? 0;
+
     if (idleTimeout <= 0) {
       await this.destroyVm(vmId);
       return;
     }
 
-    // Return VM to pool as ready (warm)
+    // Return VM to pool as ready (warm) with idle_since timestamp
     const now = new Date().toISOString();
     this.db.run(
-      `UPDATE vms SET status = 'ready', task_id = NULL, updated_at = ? WHERE id = ?`,
-      [now, vmId]
+      `UPDATE vms SET status = 'ready', task_id = NULL, idle_since = ?, updated_at = ? WHERE id = ?`,
+      [now, now, vmId]
     );
     console.log(`VM ${vmId} returned to pool (idle timeout: ${idleTimeout / 1000}s)`);
 
-    // Schedule destruction after idle timeout
+    // Belt-and-suspenders: in-process timer in case we stay alive
     this.scheduleIdleReap(vmId, idleTimeout);
+
+    // Top up the warm pool after release
+    this.ensureWarm();
   }
 
   private scheduleIdleReap(vmId: string, delayMs: number): void {
@@ -151,10 +177,75 @@ export class VMPoolManager {
       console.log(`VM ${vmId} idle timeout reached, destroying...`);
       try {
         await this.destroyVm(vmId);
+        this.ensureWarm();
       } catch (err) {
         console.error(`Failed to reap idle VM ${vmId}:`, err);
       }
     }, delayMs);
+  }
+
+  /** Reap idle VMs whose idle_since has exceeded their slot's timeout (persistent reap) */
+  async reapIdleVms(): Promise<number> {
+    const idleVms = this.db
+      .query<VmRow, []>(
+        `SELECT * FROM vms WHERE status = 'ready' AND task_id IS NULL AND idle_since IS NOT NULL`
+      )
+      .all();
+
+    let reaped = 0;
+    for (const vm of idleVms) {
+      const slot = this.slotsByName.get(vm.provider);
+      const idleTimeout = slot?.idleTimeoutMs ?? 0;
+      if (idleTimeout <= 0) {
+        // Slot config changed to 0 since release — destroy now
+        console.log(`Reaping VM ${vm.id.slice(0, 8)} (idle timeout is 0)`);
+        try {
+          await this.destroyVm(vm.id);
+          reaped++;
+        } catch (err) {
+          console.error(`Failed to reap VM ${vm.id.slice(0, 8)}:`, err);
+        }
+        continue;
+      }
+
+      const idleSinceMs = new Date(vm.idle_since!).getTime();
+      const elapsedMs = Date.now() - idleSinceMs;
+      if (elapsedMs >= idleTimeout) {
+        console.log(`Reaping VM ${vm.id.slice(0, 8)} (idle ${Math.round(elapsedMs / 1000)}s, limit ${idleTimeout / 1000}s)`);
+        try {
+          await this.destroyVm(vm.id);
+          reaped++;
+        } catch (err) {
+          console.error(`Failed to reap VM ${vm.id.slice(0, 8)}:`, err);
+        }
+      }
+    }
+    return reaped;
+  }
+
+  /** Top up warm pool to meet each slot's minReady target */
+  ensureWarm(): void {
+    for (const slot of this.config.slots) {
+      if (slot.minReady <= 0) continue;
+
+      const warmCount = this.db
+        .query<{ count: number }, [string]>(
+          `SELECT COUNT(*) as count FROM vms
+           WHERE provider = ? AND status IN ('ready', 'provisioning') AND task_id IS NULL`
+        )
+        .get(slot.name)?.count ?? 0;
+
+      const deficit = slot.minReady - warmCount;
+      if (deficit <= 0) continue;
+
+      console.log(`Pre-warm: ${slot.name} needs ${deficit} more VM(s) (have ${warmCount}, want ${slot.minReady})`);
+      for (let i = 0; i < deficit; i++) {
+        // Fire-and-forget provisioning
+        this.provisionVmForSlot(slot).catch((err) => {
+          console.error(`Pre-warm provision failed for ${slot.name}:`, err);
+        });
+      }
+    }
   }
 
   async destroyVm(vmId: string): Promise<void> {
@@ -163,7 +254,7 @@ export class VMPoolManager {
 
     const now = new Date().toISOString();
     this.db.run(
-      `UPDATE vms SET status = 'destroying', task_id = NULL, updated_at = ? WHERE id = ?`,
+      `UPDATE vms SET status = 'destroying', task_id = NULL, idle_since = NULL, updated_at = ? WHERE id = ?`,
       [now, vmId]
     );
 
@@ -272,6 +363,13 @@ export class VMPoolManager {
         destroyed++;
       }
     }
+
+    // Persistent reap: clean up expired idle VMs
+    const reaped = await this.reapIdleVms();
+    destroyed += reaped;
+
+    // Top up warm pool
+    this.ensureWarm();
 
     return { updated, destroyed };
   }

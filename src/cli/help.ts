@@ -19,6 +19,7 @@ Pool:
   hal pool                                Pool status summary
   hal pool ls [-s <status>]               List tracked VMs
   hal pool sync                           Reconcile DB with provider
+  hal pool warm                           Reap idle VMs, top up warm pool
 
 Infrastructure:
   hal vm ls                               List provider instances

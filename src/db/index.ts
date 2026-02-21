@@ -34,6 +34,9 @@ function migrate(db: Database): void {
   if (cols.length > 0 && !cols.some((c) => c.name === "provider")) {
     db.exec("ALTER TABLE vms ADD COLUMN provider TEXT NOT NULL DEFAULT 'digitalocean'");
   }
+  if (cols.length > 0 && !cols.some((c) => c.name === "idle_since")) {
+    db.exec("ALTER TABLE vms ADD COLUMN idle_since TEXT");
+  }
 }
 
 function initSchema(db: Database): void {
@@ -51,7 +54,8 @@ function initSchema(db: Database): void {
       plan        TEXT NOT NULL,
       created_at  TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
-      error       TEXT
+      error       TEXT,
+      idle_since  TEXT
     );
 
     CREATE TABLE IF NOT EXISTS tasks (

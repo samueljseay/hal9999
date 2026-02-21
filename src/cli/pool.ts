@@ -1,6 +1,6 @@
 import { parseArgs } from "node:util";
 import type { VmStatus } from "../db/types.ts";
-import { poolManager, orchestrator, normalizeProvider, defaultProvider } from "./context.ts";
+import { db, poolManager, orchestrator, normalizeProvider, defaultProvider } from "./context.ts";
 import { shortId } from "./resolve.ts";
 
 export async function poolCommand(argv: string[]): Promise<void> {
@@ -21,10 +21,11 @@ Usage:
   hal pool                        Show pool status summary
   hal pool ls [-s <status>]       List tracked VMs
   hal pool sync [-p <provider>]   Reconcile DB with provider state
+  hal pool warm [-p <provider>]   Reap idle VMs, top up warm pool
 
 Options:
   -s, --status <status>   Filter VMs: provisioning, ready, assigned, destroying, destroyed, error
-  -p, --provider <name>   Provider for sync: lima, do/digitalocean (default: lima)
+  -p, --provider <name>   Provider for sync/warm: lima, do/digitalocean (default: lima)
   -h, --help              Show this help`);
     return;
   }
@@ -72,7 +73,33 @@ Options:
     return;
   }
 
+  if (sub === "warm") {
+    const providerStr = values.provider ? normalizeProvider(values.provider) : defaultProvider();
+    const { buildProviderSlots } = await import("./context.ts");
+    const { VMPoolManager } = await import("../pool/manager.ts");
+    const slots = buildProviderSlots({ provider: providerStr });
+    const pool = new VMPoolManager(db(), { slots });
+
+    const reaped = await pool.reapIdleVms();
+    if (reaped > 0) {
+      console.log(`Reaped ${reaped} idle VM(s)`);
+    } else {
+      console.log("No idle VMs to reap");
+    }
+
+    pool.ensureWarm();
+
+    const stats = pool.getPoolStats();
+    console.log(`Pool: ${stats.ready} ready, ${stats.provisioning} provisioning, ${stats.assigned} assigned`);
+    for (const slot of slots) {
+      if (slot.minReady > 0) {
+        console.log(`  ${slot.name}: minReady=${slot.minReady}, idleTimeout=${slot.idleTimeoutMs / 1000}s`);
+      }
+    }
+    return;
+  }
+
   console.error(`Unknown pool command: ${sub}`);
-  console.log("Available: hal pool, hal pool ls, hal pool sync");
+  console.log("Available: hal pool, hal pool ls, hal pool sync, hal pool warm");
   process.exit(1);
 }

@@ -54,6 +54,12 @@ export interface OrchestratorOpts {
   plan?: string;
 }
 
+/** Per-provider idle timeout defaults (seconds) */
+const IDLE_TIMEOUT_DEFAULTS: Record<string, number> = {
+  lima: 1800,        // 30 min — free, keep warm
+  digitalocean: 300, // 5 min — costs money
+};
+
 export function buildProviderSlots(opts: OrchestratorOpts): ProviderSlot[] {
   const providerStr = opts.provider ?? defaultProvider();
   const providerNames = providerStr.split(",").map((s) => normalizeProvider(s.trim()));
@@ -71,6 +77,16 @@ export function buildProviderSlots(opts: OrchestratorOpts): ProviderSlot[] {
       process.exit(1);
     }
 
+    const idleTimeoutS = parseInt(
+      process.env[`HAL_${prefix}_IDLE_TIMEOUT_S`] ?? process.env.HAL_IDLE_TIMEOUT_S ?? String(IDLE_TIMEOUT_DEFAULTS[name] ?? 0),
+      10
+    );
+
+    const minReady = parseInt(
+      process.env[`HAL_${prefix}_MIN_READY`] ?? process.env.HAL_MIN_READY ?? "0",
+      10
+    );
+
     return {
       name,
       provider,
@@ -79,6 +95,8 @@ export function buildProviderSlots(opts: OrchestratorOpts): ProviderSlot[] {
       plan: process.env[`HAL_${prefix}_PLAN`] ?? process.env.HAL_PLAN ?? opts.plan ?? "s-1vcpu-1gb",
       maxPoolSize: parseInt(process.env[`HAL_${prefix}_MAX_POOL_SIZE`] ?? process.env.HAL_MAX_POOL_SIZE ?? "5", 10),
       priority: i,
+      idleTimeoutMs: idleTimeoutS * 1000,
+      minReady,
       sshKeyIds: process.env.HAL_SSH_KEY_ID ? [process.env.HAL_SSH_KEY_ID] : undefined,
     };
   });
@@ -90,10 +108,7 @@ export function orchestrator(opts: OrchestratorOpts): Orchestrator {
   const agent = resolveAgent(agentName);
 
   return new Orchestrator(db(), {
-    pool: {
-      slots,
-      idleTimeoutMs: parseInt(process.env.HAL_IDLE_TIMEOUT_S ?? "0", 10) * 1000,
-    },
+    pool: { slots },
     agent,
   });
 }

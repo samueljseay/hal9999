@@ -20,7 +20,7 @@ Hardware-independent agentic coding system. Spawns VMs with coding agents that w
 - `src/cli/logs.ts` — `hal logs <id>` — stream task output
 - `src/cli/events.ts` — `hal events <id>` — structured JSONL events
 - `src/cli/show.ts` — `hal show <id>` — full task details
-- `src/cli/pool.ts` — `hal pool [ls|sync]` — pool management
+- `src/cli/pool.ts` — `hal pool [ls|sync|warm]` — pool management
 - `src/cli/vm.ts` — `hal vm <cmd>` — infrastructure commands
 - `src/cli/context.ts` — Lazy db/taskManager/poolManager/orchestrator factories
 - `src/cli/resolve.ts` — Short ID prefix → full UUID resolution
@@ -58,7 +58,7 @@ Hardware-independent agentic coding system. Spawns VMs with coding agents that w
 - **Repo shorthand**: `owner/repo` → `https://github.com/owner/repo`. Full URLs still work.
 - **Short IDs**: first 8 chars of UUID for display, prefix matching for lookups (`hal show a1b2`).
 - **Provider alias**: `do` accepted as shorthand for `digitalocean`.
-- **Lazy init**: read-only commands (`ps`, `logs`, `show`, `events`, `pool`, `pool ls`) only open SQLite. Only `run` and `pool sync` build the full orchestrator.
+- **Lazy init**: read-only commands (`ps`, `logs`, `show`, `events`, `pool`, `pool ls`) only open SQLite. Only `run`, `pool sync`, and `pool warm` build providers.
 - **Backward compat**: `task create/list/watch/get/events` still work but print deprecation hints.
 - Provider implementations must satisfy the `Provider` interface in `types.ts`
 - Agent-agnostic: orchestrator takes an `AgentConfig` with a command template + env vars. Built-in presets for claude, opencode, goose. Custom commands via `-a "my-cmd {{context}}"`.
@@ -69,7 +69,10 @@ Hardware-independent agentic coding system. Spawns VMs with coding agents that w
 - **Recovery**: `recover()` finds `running` tasks and resumes poll+collect. `assigned` tasks (setup incomplete) are failed. Dead VMs → task failed.
 - **GITHUB_TOKEN**: set in `.env`, forwarded to agent env. Clone URL rewritten to `https://x-access-token:TOKEN@github.com/...`. Wrapper script configures `git credential.helper store` so agents can `git push`.
 - Auth on VMs: API keys baked into the wrapper script on the VM (not forwarded over persistent SSH). Never bake into image.
-- Warm pool: VMs are returned to pool after task completion, reaped after `HAL_IDLE_TIMEOUT_S`
+- **Per-provider idle defaults**: Lima=1800s (30min), DO=300s (5min). Override with `HAL_LIMA_IDLE_TIMEOUT_S`, `HAL_DO_IDLE_TIMEOUT_S`, or global `HAL_IDLE_TIMEOUT_S`. `idleTimeoutMs` is per-slot on `ProviderSlot`, not on `PoolConfig`.
+- **Persistent reap**: `idle_since` column in DB tracks when a VM became idle. `reapIdleVms()` compares elapsed time against slot timeout — works across process restarts. `hal pool sync` and `hal pool warm` both trigger reap.
+- **Pre-warm pool**: `ProviderSlot.minReady` (env: `HAL_LIMA_MIN_READY`, `HAL_DO_MIN_READY`, or `HAL_MIN_READY`). `ensureWarm()` fires after release, acquire, reap, and reconcile. `hal pool warm` triggers reap + warm manually.
+- Warm pool: VMs are returned to pool after task completion, reaped after per-provider idle timeout
 - Streaming output: orchestrator pulls from VM to `data/logs/<task-id>.log`, CLI tails with 250ms polling
 - JSONL events: structured event stream per task in `data/events/<task-id>.jsonl`. Orchestrator emits typed events (task_start, vm_acquired, phase, output, task_end). `hal events <id>` for pretty-printed or `--raw` JSONL output.
 - Lima provider: `-p lima` flag, uses `limactl` CLI, SSH via localhost:<dynamic-port>, template path as snapshotId

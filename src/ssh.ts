@@ -63,15 +63,21 @@ export async function waitForSsh(
   host: string,
   user = "agent",
   timeoutMs = 180_000,
-  port?: number
+  port?: number,
+  onProgress?: (message: string) => void,
 ): Promise<void> {
   const start = Date.now();
   let attempt = 0;
   const target = port ? `${host}:${port}` : host;
+  const log = (msg: string) => {
+    console.log(msg);
+    onProgress?.(msg);
+  };
+
   while (Date.now() - start < timeoutMs) {
     attempt++;
     const elapsed = Math.round((Date.now() - start) / 1000);
-    console.log(`SSH probe ${attempt} to ${target} (${elapsed}s elapsed)...`);
+    log(`SSH probe ${attempt} to ${target} (${elapsed}s elapsed)...`);
 
     const args = buildSshArgs(user, host, port, "echo ok");
     const proc = Bun.spawn(args, { stdout: "pipe", stderr: "pipe" });
@@ -79,13 +85,13 @@ export async function waitForSsh(
     const stderr = await new Response(proc.stderr).text();
     const exitCode = await proc.exited;
     if (exitCode === 0) {
-      console.log(`SSH ready on ${target}`);
+      log(`SSH ready on ${target}`);
       return;
     }
 
     // Log auth failures differently from connection failures
     if (stderr.includes("Permission denied")) {
-      console.log(`SSH probe ${attempt}: auth failed (key mismatch?)`);
+      log(`SSH probe ${attempt}: auth failed (key mismatch?)`);
     }
 
     await new Promise((r) => setTimeout(r, 5_000));
