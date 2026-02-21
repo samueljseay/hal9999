@@ -320,6 +320,14 @@ export class VMPoolManager {
       .all();
   }
 
+  listActiveVms(): VmRow[] {
+    return this.db
+      .query<VmRow, []>(
+        `SELECT * FROM vms WHERE status IN ('provisioning', 'ready', 'assigned') ORDER BY created_at DESC`
+      )
+      .all();
+  }
+
   async reconcile(): Promise<{ updated: number; destroyed: number }> {
     const activeVms = this.db
       .query<VmRow, []>(
