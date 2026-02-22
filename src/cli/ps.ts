@@ -49,12 +49,12 @@ Options:
     return;
   }
 
-  console.log(pc.dim(`${"ID".padEnd(10)} ${"STATUS".padEnd(12)} ${"REPO".padEnd(36)} CREATED`));
+  console.log(pc.dim(`${"ID".padEnd(18)} ${"STATUS".padEnd(12)} ${"REPO".padEnd(32)} CREATED`));
   for (const t of tasks) {
     const repo = stripGitHub(t.repo_url);
-    const display = repo.length > 34 ? repo.slice(-34) : repo;
+    const display = repo.length > 30 ? repo.slice(-30) : repo;
     console.log(
-      `${shortId(t.id).padEnd(10)} ${statusPad(t.status, 12)} ${display.padEnd(36)} ${relativeTime(t.created_at)}`
+      `${shortId(t.id, t.slug).padEnd(18)} ${statusPad(t.status, 12)} ${display.padEnd(32)} ${relativeTime(t.created_at)}`
     );
   }
 }

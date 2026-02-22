@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import type { TaskRow, TaskStatus } from "../db/types.ts";
 import type { CreateTaskOptions } from "./types.ts";
+import { generateUniqueSlug } from "../slugs.ts";
 
 export class TaskManager {
   private db: Database;
@@ -11,11 +12,12 @@ export class TaskManager {
 
   createTask(opts: CreateTaskOptions): TaskRow {
     const id = crypto.randomUUID();
+    const slug = generateUniqueSlug(this.db);
     const now = new Date().toISOString();
     this.db.run(
-      `INSERT INTO tasks (id, repo_url, context, status, branch, created_at, updated_at)
-       VALUES (?, ?, ?, 'pending', ?, ?, ?)`,
-      [id, opts.repoUrl, opts.context, opts.branch ?? null, now, now]
+      `INSERT INTO tasks (id, slug, repo_url, context, status, branch, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'pending', ?, ?, ?)`,
+      [id, slug, opts.repoUrl, opts.context, opts.branch ?? null, now, now]
     );
     return this.getTask(id)!;
   }

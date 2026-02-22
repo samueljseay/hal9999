@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import type { TaskRow } from "../db/types.ts";
 
 /**
  * Resolve a short ID prefix to a full UUID from the given table.
@@ -31,15 +32,26 @@ function resolveId(db: Database, table: "tasks" | "vms", short: string): string 
   return rows[0]!.id;
 }
 
-export function resolveTaskId(db: Database, short: string): string {
-  return resolveId(db, "tasks", short);
+/**
+ * Resolve a task by slug or UUID prefix.
+ * Tries slug first (exact match), then falls back to UUID prefix matching.
+ */
+export function resolveTaskId(db: Database, input: string): string {
+  // Try slug first (exact match)
+  const bySlug = db
+    .query<{ id: string }, [string]>(`SELECT id FROM tasks WHERE slug = ?`)
+    .get(input);
+  if (bySlug) return bySlug.id;
+
+  // Fall back to UUID resolution
+  return resolveId(db, "tasks", input);
 }
 
 export function resolveVmId(db: Database, short: string): string {
   return resolveId(db, "vms", short);
 }
 
-/** First 8 chars of a UUID for display */
-export function shortId(id: string): string {
-  return id.slice(0, 8);
+/** Return the task's slug for display, falling back to first 8 chars of UUID */
+export function shortId(id: string, slug?: string | null): string {
+  return slug || id.slice(0, 8);
 }

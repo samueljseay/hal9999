@@ -32,6 +32,7 @@ export type TaskStatus =
 
 export interface TaskRow {
   id: string;
+  slug: string | null;
   repo_url: string;
   context: string;
   status: TaskStatus;

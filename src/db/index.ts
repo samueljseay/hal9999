@@ -46,6 +46,10 @@ function migrate(db: Database): void {
   if (taskCols.length > 0 && !taskCols.some((c) => c.name === "pr_url")) {
     db.exec("ALTER TABLE tasks ADD COLUMN pr_url TEXT");
   }
+  if (taskCols.length > 0 && !taskCols.some((c) => c.name === "slug")) {
+    db.exec("ALTER TABLE tasks ADD COLUMN slug TEXT");
+    db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_slug ON tasks(slug)");
+  }
 }
 
 function initSchema(db: Database): void {
@@ -69,6 +73,7 @@ function initSchema(db: Database): void {
 
     CREATE TABLE IF NOT EXISTS tasks (
       id            TEXT PRIMARY KEY,
+      slug          TEXT UNIQUE,
       repo_url      TEXT NOT NULL,
       context       TEXT NOT NULL,
       status        TEXT NOT NULL DEFAULT 'pending',

@@ -96,7 +96,8 @@ Examples:
   });
 
   const taskId = orch.startTask(repoUrl, message, taskOpts);
-  const short = shortId(taskId);
+  const task = orch.tasks.getTask(taskId);
+  const short = shortId(taskId, task?.slug);
 
   const spinner = hal(`Task ${short} provisioning...`);
 

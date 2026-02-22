@@ -38,7 +38,7 @@ Displays ID, status, repo, context, VM assignment, timestamps, and result.`);
   }
 
   console.log(`${pc.dim("ID:")}        ${task.id}`);
-  console.log(`${pc.dim("Short ID:")}  ${shortId(task.id)}`);
+  console.log(`${pc.dim("Name:")}      ${shortId(task.id, task.slug)}`);
   console.log(`${pc.dim("Status:")}    ${statusColor(task.status)}`);
   console.log(`${pc.dim("Repo:")}      ${task.repo_url}`);
   console.log(`${pc.dim("Context:")}   ${task.context}`);

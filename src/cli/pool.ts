@@ -1,7 +1,7 @@
 import { parseArgs } from "node:util";
 import pc from "picocolors";
 import type { VmRow, VmStatus } from "../db/types.ts";
-import { db, poolManager, orchestrator, normalizeProvider, defaultProvider } from "./context.ts";
+import { db, poolManager, taskManager, orchestrator, normalizeProvider, defaultProvider } from "./context.ts";
 import { shortId } from "./resolve.ts";
 import { statusPad } from "./ui.ts";
 
@@ -88,14 +88,24 @@ Options:
       console.log(values.all ? "No VMs found." : "No active VMs. Use -a to show all.");
       return;
     }
+    // Build a map of task_id → slug for display
+    const taskSlugs = new Map<string, string | null>();
+    for (const vm of vms) {
+      if (vm.task_id && !taskSlugs.has(vm.task_id)) {
+        const task = taskManager().getTask(vm.task_id);
+        taskSlugs.set(vm.task_id, task?.slug ?? null);
+      }
+    }
+
     console.log(
-      pc.dim(`${"VM".padEnd(12)} ${"STATUS".padEnd(14)} ${"PROVIDER".padEnd(14)} ${"IP".padEnd(16)} ${"TASK".padEnd(10)} ${"AGE".padEnd(6)} IDLE`)
+      pc.dim(`${"VM".padEnd(12)} ${"STATUS".padEnd(14)} ${"PROVIDER".padEnd(14)} ${"IP".padEnd(16)} ${"TASK".padEnd(18)} ${"AGE".padEnd(6)} IDLE`)
     );
     for (const vm of vms) {
       const age = relativeTime(vm.created_at);
       const idle = vm.idle_since ? relativeTime(vm.idle_since) : "-";
+      const taskDisplay = vm.task_id ? shortId(vm.task_id, taskSlugs.get(vm.task_id)) : "-";
       console.log(
-        `${vmDisplayId(vm).padEnd(12)} ${statusPad(vm.status, 14)} ${vm.provider.padEnd(14)} ${(vm.ip ?? "-").padEnd(16)} ${(vm.task_id ? shortId(vm.task_id) : "-").padEnd(10)} ${age.padEnd(6)} ${idle}`
+        `${vmDisplayId(vm).padEnd(12)} ${statusPad(vm.status, 14)} ${vm.provider.padEnd(14)} ${(vm.ip ?? "-").padEnd(16)} ${taskDisplay.padEnd(18)} ${age.padEnd(6)} ${idle}`
       );
     }
     return;
