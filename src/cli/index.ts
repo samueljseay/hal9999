@@ -7,6 +7,7 @@ import { showCommand } from "./show.ts";
 import { poolCommand } from "./pool.ts";
 import { vmCommand } from "./vm.ts";
 import { imageCommand } from "./image.ts";
+import { authCommand } from "./auth.ts";
 
 function deprecation(oldCmd: string, newCmd: string): void {
   console.error(`\x1b[33mDeprecation:\x1b[0m "hal ${oldCmd}" is now "hal ${newCmd}"\n`);
@@ -83,6 +84,8 @@ async function main(): Promise<void> {
       return vmCommand(rest);
     case "image":
       return imageCommand(rest);
+    case "auth":
+      return authCommand(rest);
     default:
       console.error(`Unknown command: ${command}`);
       printHelp();

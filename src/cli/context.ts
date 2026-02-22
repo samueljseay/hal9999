@@ -121,10 +121,10 @@ export function buildProviderSlots(opts: OrchestratorOpts): ProviderSlot[] {
   });
 }
 
-export function orchestrator(opts: OrchestratorOpts): Orchestrator {
+export async function orchestrator(opts: OrchestratorOpts): Promise<Orchestrator> {
   const slots = buildProviderSlots(opts);
   const agentName = opts.agent ?? process.env.HAL_AGENT ?? "claude";
-  const agent = resolveAgent(agentName);
+  const agent = await resolveAgent(agentName);
 
   return new Orchestrator(db(), {
     pool: { slots },

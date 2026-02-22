@@ -1,6 +1,7 @@
 import type { Provider } from "./types.ts";
 import { DigitalOceanProvider } from "./digitalocean.ts";
 import { LimaProvider } from "./lima.ts";
+import { getCredential } from "../auth/index.ts";
 
 export type ProviderType = "digitalocean" | "lima";
 
@@ -10,11 +11,10 @@ export function createProvider(
 ): Provider {
   switch (type) {
     case "digitalocean": {
-      const envKey = "DO_API_TOKEN";
-      const apiKey = config?.apiKey ?? process.env[envKey];
+      const apiKey = config?.apiKey ?? getCredential("DO_API_TOKEN");
       if (!apiKey) {
         throw new Error(
-          `Missing API token. Set ${envKey} in .env or pass config.apiKey`
+          `Missing API token. Set DO_API_TOKEN in .env, run "hal auth login", or pass config.apiKey`
         );
       }
       return new DigitalOceanProvider({ apiKey });

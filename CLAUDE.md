@@ -23,6 +23,7 @@ Hardware-independent agentic coding system. Spawns VMs with coding agents that w
 - `src/cli/pool.ts` — `hal pool [ls|sync|warm]` — pool management
 - `src/cli/vm.ts` — `hal vm <cmd>` — infrastructure commands
 - `src/cli/image.ts` — `hal image [build|ls|rm]` — golden image management
+- `src/cli/auth.ts` — `hal auth [login|logout|status|set|get]` — credential management
 - `src/cli/context.ts` — Lazy db/taskManager/poolManager/orchestrator factories
 - `src/cli/resolve.ts` — Short ID prefix → full UUID resolution
 - `src/cli/help.ts` — Help text
@@ -47,6 +48,12 @@ Hardware-independent agentic coding system. Spawns VMs with coding agents that w
 - `src/events/index.ts` — Barrel export for events module
 - `src/agents/types.ts` — AgentConfig type (name, command template, install script, env, timeout)
 - `src/agents/presets.ts` — Built-in agent presets (claude, opencode, goose, custom) and resolver
+- `src/auth/types.ts` — CredentialStore interface, CredentialKey type
+- `src/auth/keychain.ts` — macOS Keychain backend (`security` CLI)
+- `src/auth/secret-service.ts` — Linux Secret Service backend (`secret-tool` CLI)
+- `src/auth/encrypted-file.ts` — Encrypted file fallback (AES-256-GCM, machine-bound)
+- `src/auth/store.ts` — Platform detection factory, `getCredential()`, `getCredentialEnv()`
+- `src/auth/index.ts` — Barrel export
 - `src/orchestrator.ts` — Fire-and-forget orchestrator: setup → nohup launch → poll → collect (agent-agnostic)
 - `src/image/setup.sh` — Golden image bootstrap script for DO (Debian 13)
 - `src/image/hal9999.yaml` — Lima VM template (Debian 13, local dev)
@@ -69,8 +76,10 @@ Hardware-independent agentic coding system. Spawns VMs with coding agents that w
 - **`/workspace/.hal/` convention**: `run.sh` (wrapper), `output.log` (stdout/stderr), `done` (exit code sentinel), `result/` (diff-stat, patch).
 - **Poll-based output**: orchestrator polls VM every 5s — checks sentinel file + pulls incremental output via `tail -c +<offset>`. Writes to local `data/logs/<taskId>.log`. `hal logs` tails the local file unchanged.
 - **Recovery**: `recover()` finds `running` tasks and resumes poll+collect. `assigned` tasks (setup incomplete) are failed. Dead VMs → task failed.
-- **GITHUB_TOKEN**: set in `.env`, forwarded to agent env. Clone URL rewritten to `https://x-access-token:TOKEN@github.com/...`. Wrapper script configures `git credential.helper store` so agents can `git push`.
-- Auth on VMs: API keys baked into the wrapper script on the VM (not forwarded over persistent SSH). Never bake into image.
+- **Credential store**: `hal auth login` stores API keys in OS-native credential managers (macOS Keychain, Linux Secret Service, or encrypted file fallback). Precedence: `process.env` (.env / exported vars) > credential store. `getCredential(key)` and `getCredentialEnv()` in `src/auth/store.ts` handle lookup. `.env` still works for CI/power users.
+- **GITHUB_TOKEN**: set via `hal auth login`, `.env`, or env var. Forwarded to agent env. Clone URL rewritten to `https://x-access-token:TOKEN@github.com/...`. Wrapper script configures `git credential.helper store` so agents can `git push`.
+- **Wrapper script credential scrubbing**: credentials are written to a temp file, sourced into env, then the temp file and the credential block in the script are deleted. Credentials exist on disk only momentarily.
+- Auth on VMs: API keys loaded via temp file in the wrapper script on the VM (not forwarded over persistent SSH). Never bake into image.
 - **Per-provider idle defaults**: Lima=1800s (30min), DO=300s (5min). Override with `HAL_LIMA_IDLE_TIMEOUT_S`, `HAL_DO_IDLE_TIMEOUT_S`, or global `HAL_IDLE_TIMEOUT_S`. `idleTimeoutMs` is per-slot on `ProviderSlot`, not on `PoolConfig`.
 - **Persistent reap**: `idle_since` column in DB tracks when a VM became idle. `reapIdleVms()` compares elapsed time against slot timeout — works across process restarts. `hal pool sync` and `hal pool warm` both trigger reap.
 - **Pre-warm pool**: `ProviderSlot.minReady` (env: `HAL_LIMA_MIN_READY`, `HAL_DO_MIN_READY`, or `HAL_MIN_READY`). `ensureWarm()` fires after release, acquire, reap, and reconcile. `hal pool warm` triggers reap + warm manually.

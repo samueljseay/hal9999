@@ -85,7 +85,7 @@ Examples:
     noPr: values["no-pr"],
   };
 
-  const orch = orchestrator({
+  const orch = await orchestrator({
     provider: providerStr,
     agent: values.agent,
     region: values.region,

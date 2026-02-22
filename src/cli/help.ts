@@ -29,6 +29,13 @@ Golden images:
   hal image ls [-p <provider>]            List available golden images
   hal image rm [-p <provider>]            Remove a golden image
 
+Auth:
+  hal auth login                          Interactive credential setup
+  hal auth logout                         Remove all stored credentials
+  hal auth status                         Show configured credentials
+  hal auth set <KEY> <VALUE>              Store a credential
+  hal auth get <KEY>                      Read a credential to stdout
+
 Infrastructure:
   hal vm ls                               List provider instances
   hal vm create --os <id>                 Create raw OS instance

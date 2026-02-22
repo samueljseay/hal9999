@@ -103,7 +103,7 @@ Options:
 
   if (sub === "sync" || sub === "reconcile") {
     const providerStr = values.provider ? normalizeProvider(values.provider) : defaultProvider();
-    const orch = orchestrator({ provider: providerStr });
+    const orch = await orchestrator({ provider: providerStr });
     await orch.recover();
     return;
   }

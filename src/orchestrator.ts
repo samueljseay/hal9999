@@ -510,24 +510,51 @@ function generateWrapperScript(
 ): string {
   const agentCommand = expandAgentCommand(agent.command, { context, workdir });
 
-  // Build env export lines
-  const envVars: Record<string, string> = {
+  // Separate credential env vars from non-sensitive ones
+  const allEnvVars: Record<string, string> = {
     PATH: "/home/agent/.local/bin:/home/agent/.bun/bin:/usr/local/bin:/usr/bin:/bin",
     ...agent.env,
   };
 
-  const envExports = Object.entries(envVars)
-    .map(([k, v]) => `export ${k}=${shellEscapeArg(v)}`)
-    .join("\n");
+  const sensitiveKeys = new Set([
+    "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN",
+    "GITHUB_TOKEN", "DO_API_TOKEN",
+  ]);
 
-  // Git credential helper config (if GITHUB_TOKEN is set)
-  const gitCredentialBlock = githubToken
-    ? `
-# Configure git credential helper so the agent can push
-git config --global credential.helper store
-echo 'https://x-access-token:${githubToken}@github.com' > ~/.git-credentials
-chmod 600 ~/.git-credentials
-`
+  const safeExports: string[] = [];
+  const credExports: string[] = [];
+
+  for (const [k, v] of Object.entries(allEnvVars)) {
+    const line = `export ${k}=${shellEscapeArg(v)}`;
+    if (sensitiveKeys.has(k)) {
+      credExports.push(line);
+    } else {
+      safeExports.push(line);
+    }
+  }
+
+  // Git credential lines (also sensitive)
+  const gitCredentialLines = githubToken
+    ? [
+        `git config --global credential.helper store`,
+        `echo 'https://x-access-token:${githubToken}@github.com' > ~/.git-credentials`,
+        `chmod 600 ~/.git-credentials`,
+      ]
+    : [];
+
+  // All sensitive lines go into a temp file that's sourced then deleted
+  const allSensitiveLines = [...credExports, ...gitCredentialLines];
+
+  const credentialBlock = allSensitiveLines.length > 0
+    ? `# Load credentials from temp file, then scrub
+_HAL_CREDS=$(mktemp)
+cat > "$_HAL_CREDS" <<'__HAL_CREDS_EOF__'
+${allSensitiveLines.join("\n")}
+__HAL_CREDS_EOF__
+source "$_HAL_CREDS"
+rm -f "$_HAL_CREDS"
+# Scrub credential block from this script on disk
+sed -i '/^cat > "\\$_HAL_CREDS"/,/^__HAL_CREDS_EOF__$/c\\# [credentials scrubbed]' "$0" 2>/dev/null || true`
     : "";
 
   return `#!/usr/bin/env bash
@@ -536,10 +563,11 @@ set -uo pipefail
 # === HAL9999 Wrapper Script ===
 # This script runs independently on the VM after SSH disconnects.
 
-# Environment
-${envExports}
+# Non-sensitive environment
+${safeExports.join("\n")}
 
-${gitCredentialBlock}
+${credentialBlock}
+
 # Create output log
 touch ${OUTPUT_LOG}
 

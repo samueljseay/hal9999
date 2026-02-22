@@ -1,4 +1,5 @@
 import type { AgentConfig } from "./types.ts";
+import { getCredentialEnv } from "../auth/index.ts";
 
 export function claudeAgent(opts: {
   oauthToken?: string;
@@ -85,33 +86,34 @@ export function customAgent(opts: {
 }
 
 /** Resolve an agent name or command string into an AgentConfig */
-export function resolveAgent(
+export async function resolveAgent(
   agent: string,
-  env: Record<string, string | undefined> = process.env as Record<string, string | undefined>
-): AgentConfig {
-  const githubToken = env.GITHUB_TOKEN;
+  env?: Record<string, string | undefined>
+): Promise<AgentConfig> {
+  const resolvedEnv = env ?? { ...getCredentialEnv(), ...process.env as Record<string, string | undefined> };
+  const githubToken = resolvedEnv.GITHUB_TOKEN;
 
   switch (agent) {
     case "claude":
       return claudeAgent({
-        oauthToken: env.CLAUDE_CODE_OAUTH_TOKEN,
-        apiKey: env.ANTHROPIC_API_KEY,
+        oauthToken: resolvedEnv.CLAUDE_CODE_OAUTH_TOKEN,
+        apiKey: resolvedEnv.ANTHROPIC_API_KEY,
         githubToken,
       });
 
     case "opencode":
-      if (!env.ANTHROPIC_API_KEY) {
+      if (!resolvedEnv.ANTHROPIC_API_KEY) {
         throw new Error("OpenCode agent requires ANTHROPIC_API_KEY");
       }
-      return opencodeAgent({ apiKey: env.ANTHROPIC_API_KEY, githubToken });
+      return opencodeAgent({ apiKey: resolvedEnv.ANTHROPIC_API_KEY, githubToken });
 
     case "goose":
-      if (!env.ANTHROPIC_API_KEY && !env.CLAUDE_CODE_OAUTH_TOKEN) {
+      if (!resolvedEnv.ANTHROPIC_API_KEY && !resolvedEnv.CLAUDE_CODE_OAUTH_TOKEN) {
         throw new Error("Goose agent requires ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN");
       }
       return gooseAgent({
-        apiKey: env.ANTHROPIC_API_KEY,
-        oauthToken: env.CLAUDE_CODE_OAUTH_TOKEN,
+        apiKey: resolvedEnv.ANTHROPIC_API_KEY,
+        oauthToken: resolvedEnv.CLAUDE_CODE_OAUTH_TOKEN,
         githubToken,
       });
 
@@ -119,7 +121,7 @@ export function resolveAgent(
       // Treat as a custom command string
       return customAgent({
         command: agent,
-        env: buildEnvFromProcess(env),
+        env: buildEnvFromProcess(resolvedEnv),
       });
   }
 }
