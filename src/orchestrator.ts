@@ -587,37 +587,36 @@ sed -i '/^cat > "\\$_HAL_CREDS"/,/^__HAL_CREDS_EOF__$/c\\# [credentials scrubbed
     : "";
 
   // Two-phase plan-first execution
-  const planContext = `You are an autonomous coding agent in PLANNING mode. Do NOT modify any source files yet.
+  const planContext = `You are an autonomous coding agent. Your ONLY job right now is to explore this repository and write an execution plan. Write the plan to ${HAL_DIR}/plan.md — that is your sole deliverable.
 
-Explore the repository at ${workdir}. Understand the architecture, identify the files that need to change, and produce a detailed step-by-step execution plan for the following task.
+Explore the repository at ${workdir}. Read source files, understand the architecture and conventions, then write a detailed plan.
 
-Task:
+Task to plan for:
 ${context}
 
-Write your complete plan to ${HAL_DIR}/plan.md with this structure:
+Write your plan to ${HAL_DIR}/plan.md with this structure:
 
 # Execution Plan
 
 ## Analysis
-Brief summary of the relevant code you found and how it works.
+What you found in the codebase — key files, patterns, conventions to follow.
 
 ## Steps
-1. [Specific action with exact file paths and what to change]
+1. [Specific action: create/modify FILE_PATH — describe exactly what to add/change]
 2. [Next action...]
-...
 
 ## Verification
-How to verify the changes work (test commands, expected behavior, etc.)
+How to verify the changes work (test commands, expected behavior).
 
-IMPORTANT: Write the plan to ${HAL_DIR}/plan.md. Do NOT modify any source files.`;
+Your only output should be the plan file. Do not implement the changes yet — a separate execution phase will follow.`;
 
-  const executeContext = `You are an autonomous coding agent in EXECUTION mode. A plan has been prepared for you.
+  const executeContext = `You are an autonomous coding agent. Execute the plan below precisely.
 
-Read the execution plan at ${HAL_DIR}/plan.md and execute it step by step.
+Read ${HAL_DIR}/plan.md for the full plan, then implement every step. The working tree is clean — all changes must come from you.
 
-Follow each step precisely. If you discover something that makes a step impossible, adapt and document why in your output. Do not stop or ask for clarification — make the most reasonable choice and continue.
+If a step is impossible, adapt and document why. Do not stop or ask questions.
 
-Original task for reference:
+Original task:
 ${context}`;
 
   const planCommand = expandAgentCommand(agent.command, { context: planContext, workdir });
@@ -625,9 +624,9 @@ ${context}`;
 
   const agentExecBlock = planFirst
     ? `# === Phase 1: Plan ===
-echo "══════════════════════════════════════════════════════" >> ${OUTPUT_LOG}
-echo "  HAL9999: Planning phase" >> ${OUTPUT_LOG}
-echo "══════════════════════════════════════════════════════" >> ${OUTPUT_LOG}
+echo "" >> ${OUTPUT_LOG}
+echo "▓▓▓ HAL9999: PLANNING PHASE ▓▓▓" >> ${OUTPUT_LOG}
+echo "" >> ${OUTPUT_LOG}
 cd ${workdir}
 ${planCommand} >> ${OUTPUT_LOG} 2>&1
 PLAN_EXIT=$?
@@ -643,10 +642,14 @@ else
     ${agentCommand} >> ${OUTPUT_LOG} 2>&1
     EXIT_CODE=$?
   else
+    # Reset working tree between phases — phase 1 may have made changes
+    cd ${workdir}
+    git checkout -- . 2>/dev/null || true
+    git clean -fd 2>/dev/null || true
+
     echo "" >> ${OUTPUT_LOG}
-    echo "══════════════════════════════════════════════════════" >> ${OUTPUT_LOG}
-    echo "  HAL9999: Execution phase" >> ${OUTPUT_LOG}
-    echo "══════════════════════════════════════════════════════" >> ${OUTPUT_LOG}
+    echo "▓▓▓ HAL9999: EXECUTION PHASE ▓▓▓" >> ${OUTPUT_LOG}
+    echo "" >> ${OUTPUT_LOG}
     cd ${workdir}
     ${executeCommand} >> ${OUTPUT_LOG} 2>&1
     EXIT_CODE=$?

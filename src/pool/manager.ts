@@ -201,7 +201,7 @@ export class VMPoolManager {
       } catch (err) {
         console.error(`Failed to reap idle VM ${vmId}:`, err);
       }
-    }, delayMs);
+    }, delayMs).unref(); // Don't keep the process alive for idle reap
   }
 
   /** Reap idle VMs whose idle_since has exceeded their slot's timeout (persistent reap) */
