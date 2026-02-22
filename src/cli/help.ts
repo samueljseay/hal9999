@@ -11,6 +11,7 @@ Run a task:
     -b, --branch <name>                   Feature branch name (default: hal/<shortId>)
     --base <branch>                       PR target branch (default: repo default)
     --no-pr                               Push branch but skip PR creation
+    --plan-first                          Plan then execute (two-phase)
 
 Task queries:
   hal ps [-s <status>]                    List tasks

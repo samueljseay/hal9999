@@ -17,6 +17,7 @@ export interface TaskOpts {
   branch?: string;
   base?: string;
   noPr?: boolean;
+  planFirst?: boolean;
 }
 
 const HAL_DIR = "/workspace/.hal";
@@ -214,7 +215,7 @@ export class Orchestrator {
     const wrappedContext = `You are working on branch "${branch}". When done:\n1. Commit your changes with a clear message\n2. Push the branch: git push origin ${branch}\n${prInstruction}\nTask:\n${context}`;
 
     // Generate and upload wrapper script, then launch with nohup
-    const wrapperScript = generateWrapperScript(agent, wrappedContext, workdir, githubToken, branch, opts.noPr);
+    const wrapperScript = generateWrapperScript(agent, wrappedContext, workdir, githubToken, branch, opts.noPr, opts.planFirst);
     const scriptBase64 = Buffer.from(wrapperScript).toString("base64");
 
     log.writeHeader(`launching ${agent.name} agent`);
@@ -333,6 +334,21 @@ export class Orchestrator {
     });
     const exitCode = parseInt(exitCodeResult.stdout.trim(), 10);
     const exitCodeValid = !isNaN(exitCode) ? exitCode : 1;
+
+    // Fetch plan.md if it exists (plan-first mode artifact)
+    const planResult = await sshExec({
+      host: vm.ip!,
+      port: sshPort,
+      command: `cat ${HAL_DIR}/plan.md 2>/dev/null || true`,
+      timeoutMs: 10_000,
+    });
+    const plan = planResult.stdout.trim();
+    if (plan) {
+      // Save plan locally as an artifact
+      const planPath = `data/plans/${taskId}.md`;
+      await Bun.write(planPath, plan);
+      log.append(`\nPlan saved to ${planPath}\n`);
+    }
 
     // Fetch diff-stat if it exists
     let diffStat = "";
@@ -507,6 +523,7 @@ function generateWrapperScript(
   githubToken?: string,
   branch?: string,
   noPr?: boolean,
+  planFirst?: boolean,
 ): string {
   const agentCommand = expandAgentCommand(agent.command, { context, workdir });
 
@@ -557,6 +574,77 @@ rm -f "$_HAL_CREDS"
 sed -i '/^cat > "\\$_HAL_CREDS"/,/^__HAL_CREDS_EOF__$/c\\# [credentials scrubbed]' "$0" 2>/dev/null || true`
     : "";
 
+  // Two-phase plan-first execution
+  const planContext = `You are an autonomous coding agent in PLANNING mode. Do NOT modify any source files yet.
+
+Explore the repository at ${workdir}. Understand the architecture, identify the files that need to change, and produce a detailed step-by-step execution plan for the following task.
+
+Task:
+${context}
+
+Write your complete plan to ${HAL_DIR}/plan.md with this structure:
+
+# Execution Plan
+
+## Analysis
+Brief summary of the relevant code you found and how it works.
+
+## Steps
+1. [Specific action with exact file paths and what to change]
+2. [Next action...]
+...
+
+## Verification
+How to verify the changes work (test commands, expected behavior, etc.)
+
+IMPORTANT: Write the plan to ${HAL_DIR}/plan.md. Do NOT modify any source files.`;
+
+  const executeContext = `You are an autonomous coding agent in EXECUTION mode. A plan has been prepared for you.
+
+Read the execution plan at ${HAL_DIR}/plan.md and execute it step by step.
+
+Follow each step precisely. If you discover something that makes a step impossible, adapt and document why in your output. Do not stop or ask for clarification — make the most reasonable choice and continue.
+
+Original task for reference:
+${context}`;
+
+  const planCommand = expandAgentCommand(agent.command, { context: planContext, workdir });
+  const executeCommand = expandAgentCommand(agent.command, { context: executeContext, workdir });
+
+  const agentExecBlock = planFirst
+    ? `# === Phase 1: Plan ===
+echo "══════════════════════════════════════════════════════" >> ${OUTPUT_LOG}
+echo "  HAL9999: Planning phase" >> ${OUTPUT_LOG}
+echo "══════════════════════════════════════════════════════" >> ${OUTPUT_LOG}
+cd ${workdir}
+${planCommand} >> ${OUTPUT_LOG} 2>&1
+PLAN_EXIT=$?
+
+if [ $PLAN_EXIT -ne 0 ]; then
+  echo "Planning phase failed (exit $PLAN_EXIT)" >> ${OUTPUT_LOG}
+  EXIT_CODE=$PLAN_EXIT
+else
+  # Verify plan was created
+  if [ ! -f ${HAL_DIR}/plan.md ]; then
+    echo "WARNING: Agent did not create ${HAL_DIR}/plan.md — falling back to direct execution" >> ${OUTPUT_LOG}
+    cd ${workdir}
+    ${agentCommand} >> ${OUTPUT_LOG} 2>&1
+    EXIT_CODE=$?
+  else
+    echo "" >> ${OUTPUT_LOG}
+    echo "══════════════════════════════════════════════════════" >> ${OUTPUT_LOG}
+    echo "  HAL9999: Execution phase" >> ${OUTPUT_LOG}
+    echo "══════════════════════════════════════════════════════" >> ${OUTPUT_LOG}
+    cd ${workdir}
+    ${executeCommand} >> ${OUTPUT_LOG} 2>&1
+    EXIT_CODE=$?
+  fi
+fi`
+    : `# Run the agent, capturing all output
+cd ${workdir}
+${agentCommand} >> ${OUTPUT_LOG} 2>&1
+EXIT_CODE=$?`;
+
   return `#!/usr/bin/env bash
 set -uo pipefail
 
@@ -571,10 +659,7 @@ ${credentialBlock}
 # Create output log
 touch ${OUTPUT_LOG}
 
-# Run the agent, capturing all output
-cd ${workdir}
-${agentCommand} >> ${OUTPUT_LOG} 2>&1
-EXIT_CODE=$?
+${agentExecBlock}
 
 # Disable strict mode for cleanup — sentinel MUST be written
 set +uo pipefail

@@ -30,6 +30,7 @@ export async function runCommand(argv: string[]): Promise<void> {
       branch: { type: "string", short: "b" },
       base: { type: "string" },
       "no-pr": { type: "boolean", default: false },
+      "plan-first": { type: "boolean", default: false },
       verbose: { type: "boolean", short: "v", default: false },
       help: { type: "boolean", short: "h", default: false },
     },
@@ -51,6 +52,7 @@ Options:
   -b, --branch <name>     Feature branch name (default: hal/<shortId>)
   --base <branch>         PR target branch (default: repo's default branch)
   --no-pr                 Push branch but skip PR creation
+  --plan-first            Two-phase execution: plan then execute
   --region <region>       Region for cloud provider (default: nyc1)
   --plan <plan>           Instance size/plan (default: s-1vcpu-1gb)
   -v, --verbose           Show detailed VM provisioning output
@@ -83,6 +85,7 @@ Examples:
     branch: values.branch,
     base: values.base,
     noPr: values["no-pr"],
+    planFirst: values["plan-first"],
   };
 
   const orch = await orchestrator({
