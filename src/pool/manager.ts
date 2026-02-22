@@ -103,10 +103,9 @@ export class VMPoolManager {
   async acquireVm(taskId: string, onProgress?: (message: string) => void): Promise<VmRow> {
     const progress = onProgress ?? (() => {});
 
-    // Release orphaned VMs from finished tasks back to the warm pool
+    // Clean up all orphan/stale/error states before looking for a VM
     await this.releaseOrphans();
-
-    // Reap expired idle VMs before checking the warm pool
+    await this.reapStaleProvisioning();
     await this.reapIdleVms();
 
     // Try to find an existing ready VM (any provider)
@@ -243,6 +242,74 @@ export class VMPoolManager {
     return reaped;
   }
 
+  /** Clean up VMs stuck in 'provisioning' for too long (process died mid-provision) */
+  async reapStaleProvisioning(maxAgeMs = 600_000): Promise<number> {
+    const cutoff = new Date(Date.now() - maxAgeMs).toISOString();
+    const stale = this.db
+      .query<VmRow, [string]>(
+        `SELECT * FROM vms WHERE status = 'provisioning' AND created_at < ?`
+      )
+      .all(cutoff);
+
+    let reaped = 0;
+    for (const vm of stale) {
+      console.log(`Reaping stale provisioning VM ${vm.id.slice(0, 8)} (provider: ${vm.provider})`);
+      try {
+        await this.destroyVm(vm.id);
+        reaped++;
+      } catch {
+        // Provider may not know about it — just mark destroyed
+        this.db.run(
+          `UPDATE vms SET status = 'destroyed', updated_at = ? WHERE id = ?`,
+          [new Date().toISOString(), vm.id]
+        );
+        reaped++;
+      }
+    }
+    return reaped;
+  }
+
+  /** Retry destroying VMs stuck in 'error' state */
+  async reapErrorVms(): Promise<number> {
+    const errorVms = this.db
+      .query<VmRow, []>(
+        `SELECT * FROM vms WHERE status = 'error'`
+      )
+      .all();
+
+    let reaped = 0;
+    for (const vm of errorVms) {
+      const slot = this.slotsByName.get(vm.provider);
+      if (!slot) {
+        // Provider no longer configured — just mark destroyed
+        this.db.run(
+          `UPDATE vms SET status = 'destroyed', updated_at = ? WHERE id = ?`,
+          [new Date().toISOString(), vm.id]
+        );
+        reaped++;
+        continue;
+      }
+
+      console.log(`Retrying destroy for error VM ${vm.id.slice(0, 8)} (${vm.provider})`);
+      try {
+        await slot.provider.destroyInstance(vm.id);
+        this.db.run(
+          `UPDATE vms SET status = 'destroyed', updated_at = ? WHERE id = ?`,
+          [new Date().toISOString(), vm.id]
+        );
+        reaped++;
+      } catch {
+        // Still can't destroy — provider may not know about it, mark destroyed
+        this.db.run(
+          `UPDATE vms SET status = 'destroyed', updated_at = ? WHERE id = ?`,
+          [new Date().toISOString(), vm.id]
+        );
+        reaped++;
+      }
+    }
+    return reaped;
+  }
+
   /** Top up warm pool to meet each slot's minReady target */
   ensureWarm(): void {
     for (const slot of this.config.slots) {
@@ -292,7 +359,29 @@ export class VMPoolManager {
       )
       .all();
 
-    const allOrphans = [...orphans, ...noTask];
+    // Tasks stuck in running/assigned with stale updated_at (process died mid-poll)
+    const staleCutoff = new Date(Date.now() - 600_000).toISOString(); // 10 min
+    const staleRunning = this.db
+      .query<VmRow, [string]>(
+        `SELECT v.* FROM vms v
+         JOIN tasks t ON v.task_id = t.id
+         WHERE v.status = 'assigned'
+           AND t.status IN ('running', 'assigned')
+           AND t.updated_at < ?`
+      )
+      .all(staleCutoff);
+
+    // Fail the stale tasks so they don't get picked up again
+    for (const vm of staleRunning) {
+      if (vm.task_id) {
+        this.db.run(
+          `UPDATE tasks SET status = 'failed', result = 'Stale task (process died)', completed_at = ?, updated_at = ? WHERE id = ? AND status IN ('running', 'assigned')`,
+          [new Date().toISOString(), new Date().toISOString(), vm.task_id]
+        );
+      }
+    }
+
+    const allOrphans = [...orphans, ...noTask, ...staleRunning];
     if (allOrphans.length === 0) return 0;
 
     let released = 0;
@@ -449,9 +538,41 @@ export class VMPoolManager {
       }
     }
 
+    // Clean up error-state VMs
+    const errorReaped = await this.reapErrorVms();
+    destroyed += errorReaped;
+
+    // Clean up stale provisioning VMs
+    const staleReaped = await this.reapStaleProvisioning();
+    destroyed += staleReaped;
+
     // Persistent reap: clean up expired idle VMs
     const reaped = await this.reapIdleVms();
     destroyed += reaped;
+
+    // Release orphaned VMs
+    const orphansReleased = await this.releaseOrphans();
+
+    // Provider→DB scan: destroy VMs the provider knows about but DB doesn't track
+    for (const slot of this.config.slots) {
+      try {
+        const instances = await slot.provider.listInstances();
+        for (const inst of instances) {
+          const dbVm = this.getVm(inst.id);
+          if (!dbVm || dbVm.status === "destroyed") {
+            console.log(`Unknown provider instance ${inst.id.slice(0, 12)} (${slot.name}) — destroying`);
+            try {
+              await slot.provider.destroyInstance(inst.id);
+              destroyed++;
+            } catch (err) {
+              console.error(`Failed to destroy unknown instance ${inst.id.slice(0, 12)}:`, err);
+            }
+          }
+        }
+      } catch (err) {
+        console.error(`Failed to list instances for ${slot.name}:`, err);
+      }
+    }
 
     // Top up warm pool
     this.ensureWarm();

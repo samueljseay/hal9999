@@ -108,17 +108,19 @@ Examples:
     const t = orch.tasks.getTask(taskId);
     const status = t?.status ?? "unknown";
 
+    // Mark incomplete tasks as failed so releaseOrphans catches the VM next run
+    if (status === "running" || status === "assigned" || status === "pending") {
+      orch.tasks.failTask(taskId, "Interrupted by user (SIGINT)");
+    }
+
     if (status === "running") {
-      console.log(pc.yellow(`\nAgent still running on VM. Output collection stopped.`));
-      console.log(`Resume: hal run is needed to poll for results.`);
-      console.log(`Check status: hal show ${short}`);
+      console.log(pc.yellow(`\nTask interrupted. VM will be reclaimed on next run.`));
     } else if (status === "completed" || status === "failed") {
       console.log(`\nTask already ${status}.`);
       console.log(`Details: hal show ${short}`);
     } else {
       // pending, assigned — still setting up
-      console.log(pc.yellow(`\nVM still provisioning. Agent not yet launched.`));
-      console.log(`Check status: hal show ${short}`);
+      console.log(pc.yellow(`\nTask interrupted during setup. VM will be reclaimed on next run.`));
     }
     process.exit(0);
   });

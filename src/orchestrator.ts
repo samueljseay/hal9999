@@ -221,15 +221,41 @@ export class Orchestrator {
     log.writeHeader(`launching ${agent.name} agent`);
     events.emit({ type: "phase", name: "agent_launch" });
 
-    // Upload + launch in a single SSH session via stdin pipe.
-    // base64 reads stdin to EOF (Bun closes pipe after writing), then the rest runs.
-    // `exit 0` forces the shell to terminate after backgrounding — prevents SSH hangs.
-    const uploadAndLaunchArgs = buildSshArgs(
+    // Step 1: Upload script via stdin pipe (base64 needs exclusive stdin access)
+    const uploadArgs = buildSshArgs(
       "agent", vm.ip!, sshPort,
-      `mkdir -p ${HAL_DIR} ${RESULT_DIR} && base64 -d > ${RUN_SCRIPT} && chmod +x ${RUN_SCRIPT} && nohup ${RUN_SCRIPT} </dev/null >/dev/null 2>&1 & exit 0`
+      `mkdir -p ${HAL_DIR} ${RESULT_DIR} && base64 -d > ${RUN_SCRIPT} && chmod +x ${RUN_SCRIPT}`
     );
-    const launchProc = Bun.spawn(uploadAndLaunchArgs, {
+    const uploadProc = Bun.spawn(uploadArgs, {
       stdin: Buffer.from(scriptBase64),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    let uploadTimedOut = false;
+    const uploadTimer = setTimeout(() => {
+      uploadTimedOut = true;
+      uploadProc.kill();
+    }, 30_000);
+
+    const uploadStderr = await new Response(uploadProc.stderr).text();
+    const uploadExit = await uploadProc.exited;
+    clearTimeout(uploadTimer);
+
+    if (uploadTimedOut) {
+      throw new Error("Script upload timed out after 30s");
+    }
+    if (uploadExit !== 0) {
+      throw new Error(`Failed to upload wrapper script: ${uploadStderr}`);
+    }
+
+    // Step 2: Launch with nohup (no stdin needed — use 'ignore' to prevent SSH hang)
+    const launchArgs = buildSshArgs(
+      "agent", vm.ip!, sshPort,
+      `nohup ${RUN_SCRIPT} </dev/null >/dev/null 2>&1 & exit 0`
+    );
+    const launchProc = Bun.spawn(launchArgs, {
+      stdin: "ignore",
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -238,17 +264,17 @@ export class Orchestrator {
     const launchTimer = setTimeout(() => {
       launchTimedOut = true;
       launchProc.kill();
-    }, 30_000);
+    }, 15_000);
 
     const launchStderr = await new Response(launchProc.stderr).text();
     const launchExit = await launchProc.exited;
     clearTimeout(launchTimer);
 
     if (launchTimedOut) {
-      throw new Error("Script upload+launch timed out after 30s");
+      throw new Error("Script launch timed out after 15s");
     }
     if (launchExit !== 0) {
-      throw new Error(`Failed to upload/launch wrapper script: ${launchStderr}`);
+      throw new Error(`Failed to launch wrapper script: ${launchStderr}`);
     }
 
     // Agent is now running independently on the VM
@@ -318,6 +344,9 @@ export class Orchestrator {
         }
         remoteOffset = remoteSize;
       }
+
+      // Heartbeat: bump updated_at so stale-task detection knows we're alive
+      this.tasks.touchTask(taskId);
 
       if (isDone) break;
 

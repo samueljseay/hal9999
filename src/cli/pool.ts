@@ -46,11 +46,12 @@ Usage:
   hal pool ls [-s <status>] [-a]  List VMs (active only by default)
   hal pool sync [-p <provider>]   Reconcile DB with provider state
   hal pool warm [-p <provider>]   Reap idle VMs, top up warm pool
+  hal pool gc [-p <provider>]     Full cleanup: stale, error, orphan, idle, unknown VMs
 
 Options:
   -s, --status <status>   Filter VMs: provisioning, ready, assigned, destroying, destroyed, error
   -a, --all               Show all VMs including destroyed (default: active only)
-  -p, --provider <name>   Provider for sync/warm: lima, do/digitalocean (default: lima)
+  -p, --provider <name>   Provider for sync/warm/gc: lima, do/digitalocean (default: lima)
   -h, --help              Show this help`);
     return;
   }
@@ -144,7 +145,47 @@ Options:
     return;
   }
 
+  if (sub === "gc") {
+    const providerStr = values.provider ? normalizeProvider(values.provider) : defaultProvider();
+    const { buildProviderSlots } = await import("./context.ts");
+    const { VMPoolManager } = await import("../pool/manager.ts");
+    const slots = buildProviderSlots({ provider: providerStr });
+    const pool = new VMPoolManager(db(), { slots });
+
+    console.log("Running full pool cleanup...\n");
+
+    const staleProvisioning = await pool.reapStaleProvisioning();
+    if (staleProvisioning > 0) console.log(`  Stale provisioning: ${pc.yellow(String(staleProvisioning))} destroyed`);
+
+    const errorVms = await pool.reapErrorVms();
+    if (errorVms > 0) console.log(`  Error VMs:          ${pc.yellow(String(errorVms))} destroyed`);
+
+    const orphans = await pool.releaseOrphans();
+    if (orphans > 0) console.log(`  Orphaned VMs:       ${pc.yellow(String(orphans))} released`);
+
+    const idle = await pool.reapIdleVms();
+    if (idle > 0) console.log(`  Idle VMs:           ${pc.yellow(String(idle))} reaped`);
+
+    const reconciled = await pool.reconcile();
+    if (reconciled.updated > 0 || reconciled.destroyed > 0) {
+      console.log(`  Reconcile:          ${reconciled.updated} updated, ${reconciled.destroyed} destroyed`);
+    }
+
+    pool.ensureWarm();
+
+    const total = staleProvisioning + errorVms + orphans + idle + reconciled.destroyed;
+    if (total === 0) {
+      console.log(pc.green("Pool is clean — nothing to do."));
+    } else {
+      console.log(`\n${pc.green(`Cleaned up ${total} VM(s).`)}`);
+    }
+
+    const stats = pool.getPoolStats();
+    console.log(`\nPool: ${pc.green(String(stats.ready))} ready, ${pc.yellow(String(stats.provisioning))} provisioning, ${pc.yellow(String(stats.assigned))} assigned`);
+    return;
+  }
+
   console.error(`Unknown pool command: ${sub}`);
-  console.log("Available: hal pool, hal pool ls, hal pool sync, hal pool warm");
+  console.log("Available: hal pool, hal pool ls, hal pool sync, hal pool warm, hal pool gc");
   process.exit(1);
 }

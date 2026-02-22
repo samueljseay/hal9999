@@ -74,6 +74,14 @@ export class TaskManager {
     return this.getTask(taskId)!;
   }
 
+  /** Bump updated_at to signal the task is still being actively polled */
+  touchTask(taskId: string): void {
+    this.db.run(
+      `UPDATE tasks SET updated_at = ? WHERE id = ?`,
+      [new Date().toISOString(), taskId]
+    );
+  }
+
   getTask(taskId: string): TaskRow | null {
     return this.db
       .query<TaskRow, [string]>(`SELECT * FROM tasks WHERE id = ?`)
