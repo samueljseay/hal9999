@@ -4,7 +4,7 @@ import type { TaskRow, VmRow } from "./db/types.ts";
 import type { AgentConfig } from "./agents/types.ts";
 import { VMPoolManager } from "./pool/manager.ts";
 import { TaskManager } from "./tasks/manager.ts";
-import { sshExec, sshExecStreaming, waitForSsh } from "./ssh.ts";
+import { sshExec, sshExecStreaming, waitForSsh, buildSshArgs } from "./ssh.ts";
 import { createLogWriter } from "./logs.ts";
 import { createEventWriter } from "./events/index.ts";
 
@@ -221,19 +221,32 @@ export class Orchestrator {
     log.writeHeader(`launching ${agent.name} agent`);
     events.emit({ type: "phase", name: "agent_launch" });
 
-    // Create .hal dir, decode script, make executable, launch with nohup
-    const launchCmd = [
-      `mkdir -p ${HAL_DIR} ${RESULT_DIR}`,
-      `echo '${scriptBase64}' | base64 -d > ${RUN_SCRIPT}`,
-      `chmod +x ${RUN_SCRIPT}`,
-      `nohup ${RUN_SCRIPT} > /dev/null 2>&1 &`,
-    ].join(" && ");
+    // Upload script via stdin (avoids huge command-line strings for plan-first mode)
+    await sshExec({
+      host: vm.ip!,
+      port: sshPort,
+      command: `mkdir -p ${HAL_DIR} ${RESULT_DIR}`,
+      timeoutMs: 10_000,
+    });
 
+    const uploadArgs = buildSshArgs("agent", vm.ip!, sshPort, `base64 -d > ${RUN_SCRIPT}`);
+    const uploadProc = Bun.spawn(uploadArgs, {
+      stdin: Buffer.from(scriptBase64),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const uploadExit = await uploadProc.exited;
+    if (uploadExit !== 0) {
+      const stderr = await new Response(uploadProc.stderr).text();
+      throw new Error(`Failed to upload wrapper script: ${stderr}`);
+    }
+
+    // Launch with nohup — redirect all FDs and disown to avoid SSH session hanging
     const launchResult = await sshExec({
       host: vm.ip!,
       port: sshPort,
-      command: launchCmd,
-      timeoutMs: 30_000,
+      command: `chmod +x ${RUN_SCRIPT} && nohup ${RUN_SCRIPT} > /dev/null 2>&1 < /dev/null & disown`,
+      timeoutMs: 15_000,
     });
     if (launchResult.exitCode !== 0) {
       throw new Error(`Failed to launch wrapper script: ${launchResult.stderr}`);

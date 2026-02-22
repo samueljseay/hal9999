@@ -176,7 +176,7 @@ export async function sshExecStreaming(opts: SshExecStreamingOptions): Promise<S
   };
 }
 
-function buildSshArgs(user: string, host: string, port: number | undefined, command: string): string[] {
+export function buildSshArgs(user: string, host: string, port: number | undefined, command: string): string[] {
   const args = [
     "ssh",
     "-o", "StrictHostKeyChecking=no",
