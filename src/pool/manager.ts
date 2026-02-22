@@ -103,6 +103,9 @@ export class VMPoolManager {
   async acquireVm(taskId: string, onProgress?: (message: string) => void): Promise<VmRow> {
     const progress = onProgress ?? (() => {});
 
+    // Release orphaned VMs from finished tasks back to the warm pool
+    await this.releaseOrphans();
+
     // Reap expired idle VMs before checking the warm pool
     await this.reapIdleVms();
 
@@ -263,6 +266,63 @@ export class VMPoolManager {
         });
       }
     }
+  }
+
+  /**
+   * Release VMs orphaned by finished tasks (completed/failed but VM still assigned).
+   * Lightweight cleanup that runs at the start of each `hal run`.
+   */
+  async releaseOrphans(): Promise<number> {
+    const orphans = this.db
+      .query<VmRow, []>(
+        `SELECT v.* FROM vms v
+         JOIN tasks t ON v.task_id = t.id
+         WHERE v.status = 'assigned'
+           AND t.status IN ('completed', 'failed')`
+      )
+      .all();
+
+    // Also find assigned VMs with no matching task at all
+    const noTask = this.db
+      .query<VmRow, []>(
+        `SELECT v.* FROM vms v
+         WHERE v.status = 'assigned'
+           AND v.task_id IS NOT NULL
+           AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.id = v.task_id)`
+      )
+      .all();
+
+    const allOrphans = [...orphans, ...noTask];
+    if (allOrphans.length === 0) return 0;
+
+    let released = 0;
+    for (const vm of allOrphans) {
+      const slot = this.slotsByName.get(vm.provider);
+      const idleTimeout = slot?.idleTimeoutMs ?? 0;
+
+      if (idleTimeout <= 0) {
+        // No warm pool for this provider — destroy immediately
+        try {
+          await this.destroyVm(vm.id);
+        } catch (err) {
+          console.error(`Failed to destroy orphan VM ${vm.id.slice(0, 8)}:`, err);
+        }
+      } else {
+        // Return to warm pool
+        const now = new Date().toISOString();
+        this.db.run(
+          `UPDATE vms SET status = 'ready', task_id = NULL, idle_since = ?, updated_at = ? WHERE id = ?`,
+          [now, now, vm.id]
+        );
+        this.scheduleIdleReap(vm.id, idleTimeout);
+      }
+      released++;
+    }
+
+    if (released > 0) {
+      console.log(`Released ${released} orphaned VM(s) back to pool`);
+    }
+    return released;
   }
 
   async destroyVm(vmId: string): Promise<void> {
