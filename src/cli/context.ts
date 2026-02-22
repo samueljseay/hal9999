@@ -39,11 +39,12 @@ export function poolManager(): VMPoolManager {
 
 export function normalizeProvider(input: string): ProviderType {
   if (input === "do") return "digitalocean";
+  if (input === "local") return process.platform === "darwin" ? "lima" : "incus";
   return input as ProviderType;
 }
 
 export const defaultProvider = (): ProviderType =>
-  normalizeProvider(process.env.HAL_DEFAULT_PROVIDER ?? "lima");
+  normalizeProvider(process.env.HAL_DEFAULT_PROVIDER ?? "local");
 
 // --- Full orchestrator (tier 3) ---
 
@@ -60,6 +61,7 @@ export interface OrchestratorOpts {
 /** Per-provider idle timeout defaults (seconds) */
 const IDLE_TIMEOUT_DEFAULTS: Record<string, number> = {
   lima: 1800,        // 30 min — free, keep warm
+  incus: 1800,       // 30 min — local/free, same as Lima
   digitalocean: 300, // 5 min — costs money
 };
 
@@ -79,6 +81,25 @@ function resolveLimaSnapshotId(): string {
   return "src/image/hal9999.yaml";
 }
 
+/** Sync check for hal9999-golden-image published Incus image. */
+function resolveIncusSnapshotId(): string {
+  if (process.env.HAL_INCUS_SNAPSHOT_ID) return process.env.HAL_INCUS_SNAPSHOT_ID;
+  const result = Bun.spawnSync(
+    ["incus", "image", "list", "hal9999-golden-image", "--format=json"],
+    { stdout: "pipe", stderr: "pipe" }
+  );
+  if (result.exitCode === 0) {
+    const stdout = new TextDecoder().decode(result.stdout);
+    try {
+      const images = JSON.parse(stdout);
+      if (Array.isArray(images) && images.length > 0) {
+        return "hal9999-golden-image";
+      }
+    } catch {}
+  }
+  return "images:debian/13";
+}
+
 export function buildProviderSlots(opts: OrchestratorOpts): ProviderSlot[] {
   const providerStr = opts.provider ?? defaultProvider();
   const providerNames = providerStr.split(",").map((s) => normalizeProvider(s.trim()));
@@ -89,7 +110,9 @@ export function buildProviderSlots(opts: OrchestratorOpts): ProviderSlot[] {
     const prefix = name === "digitalocean" ? "DO" : name.toUpperCase();
     const snapshotId = name === "lima"
       ? resolveLimaSnapshotId()
-      : (process.env[`HAL_${prefix}_SNAPSHOT_ID`] ?? process.env.HAL_SNAPSHOT_ID);
+      : name === "incus"
+        ? resolveIncusSnapshotId()
+        : (process.env[`HAL_${prefix}_SNAPSHOT_ID`] ?? process.env.HAL_SNAPSHOT_ID);
 
     if (!snapshotId) {
       console.error(`Error: HAL_SNAPSHOT_ID (or HAL_${prefix}_SNAPSHOT_ID) is required for ${name}`);

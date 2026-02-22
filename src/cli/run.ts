@@ -47,7 +47,7 @@ Arguments:
 Options:
   -m, --message <text>    Task instructions (required)
   -a, --agent <name>      Agent: claude, opencode, goose, or custom cmd (default: claude)
-  -p, --provider <name>   Provider: lima, do/digitalocean (default: lima)
+  -p, --provider <name>   Provider: local (auto), lima, incus, do/digitalocean
   -b, --branch <name>     Feature branch name (default: hal/<shortId>)
   --base <branch>         PR target branch (default: repo's default branch)
   --no-pr                 Push branch but skip PR creation

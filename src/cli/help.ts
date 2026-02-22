@@ -7,7 +7,7 @@ Usage:
 Run a task:
   hal run <repo> -m "instructions"        Run an agent on a repo
     -a, --agent <name>                    Agent: claude, opencode, goose, or custom (default: claude)
-    -p, --provider <name>                 Provider: lima, do/digitalocean (default: lima)
+    -p, --provider <name>                 Provider: local (auto), lima, incus, do/digitalocean
     -b, --branch <name>                   Feature branch name (default: hal/<shortId>)
     --base <branch>                       PR target branch (default: repo default)
     --no-pr                               Push branch but skip PR creation

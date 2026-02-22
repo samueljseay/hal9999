@@ -7,7 +7,7 @@ Hardware-independent agentic coding system. Spawns VMs with coding agents that w
 - **Runtime**: Bun (use bun instead of node/npm everywhere)
 - **Language**: TypeScript (strict mode)
 - **Database**: SQLite via `bun:sqlite` (stored in `data/hal9999.db`)
-- **VM Provider**: DigitalOcean (cloud), Lima (local macOS VMs) — provider-agnostic interface supports multiple backends
+- **VM Provider**: DigitalOcean (cloud), Lima (local macOS VMs), Incus (local Linux VMs) — provider-agnostic interface supports multiple backends
 
 ## Project Structure
 
@@ -33,6 +33,7 @@ Hardware-independent agentic coding system. Spawns VMs with coding agents that w
 - `src/providers/types.ts` — Provider interface and shared types
 - `src/providers/digitalocean.ts` — DigitalOcean API implementation
 - `src/providers/lima.ts` — Lima (local macOS VM) implementation
+- `src/providers/incus.ts` — Incus (local Linux VM) implementation
 - `src/providers/index.ts` — Provider factory
 - `src/db/types.ts` — SQLite row types (VmRow, TaskRow)
 - `src/db/index.ts` — Database singleton and schema init
@@ -63,10 +64,10 @@ Hardware-independent agentic coding system. Spawns VMs with coding agents that w
 - Bun auto-loads `.env` — no dotenv
 - Use `bun:test` for tests
 - **CLI binary**: `hal` (via `bun link`). Entry: `bin/hal` → `src/cli/index.ts`. Old `bun run src/cli.ts` still works.
-- **Default provider: `lima`** — local-first, zero-cost. Override with `-p do` or `HAL_DEFAULT_PROVIDER=digitalocean`.
+- **Default provider: `local`** — auto-detects Lima (macOS) or Incus (Linux). Override with `-p lima`, `-p incus`, `-p do`, or `HAL_DEFAULT_PROVIDER=<name>`.
 - **Repo shorthand**: `owner/repo` → `https://github.com/owner/repo`. Full URLs still work.
 - **Short IDs**: first 8 chars of UUID for display, prefix matching for lookups (`hal show a1b2`).
-- **Provider alias**: `do` accepted as shorthand for `digitalocean`.
+- **Provider aliases**: `do` → `digitalocean`, `local` → `lima` (macOS) or `incus` (Linux).
 - **Lazy init**: read-only commands (`ps`, `logs`, `show`, `events`, `pool`, `pool ls`) only open SQLite. Only `run`, `pool sync`, and `pool warm` build providers.
 - **Backward compat**: `task create/list/watch/get/events` still work but print deprecation hints.
 - Provider implementations must satisfy the `Provider` interface in `types.ts`
@@ -80,15 +81,17 @@ Hardware-independent agentic coding system. Spawns VMs with coding agents that w
 - **GITHUB_TOKEN**: set via `hal auth login`, `.env`, or env var. Forwarded to agent env. Clone URL rewritten to `https://x-access-token:TOKEN@github.com/...`. Wrapper script configures `git credential.helper store` so agents can `git push`.
 - **Wrapper script credential scrubbing**: credentials are written to a temp file, sourced into env, then the temp file and the credential block in the script are deleted. Credentials exist on disk only momentarily.
 - Auth on VMs: API keys loaded via temp file in the wrapper script on the VM (not forwarded over persistent SSH). Never bake into image.
-- **Per-provider idle defaults**: Lima=1800s (30min), DO=300s (5min). Override with `HAL_LIMA_IDLE_TIMEOUT_S`, `HAL_DO_IDLE_TIMEOUT_S`, or global `HAL_IDLE_TIMEOUT_S`. `idleTimeoutMs` is per-slot on `ProviderSlot`, not on `PoolConfig`.
+- **Per-provider idle defaults**: Lima=1800s (30min), Incus=1800s (30min), DO=300s (5min). Override with `HAL_LIMA_IDLE_TIMEOUT_S`, `HAL_INCUS_IDLE_TIMEOUT_S`, `HAL_DO_IDLE_TIMEOUT_S`, or global `HAL_IDLE_TIMEOUT_S`. `idleTimeoutMs` is per-slot on `ProviderSlot`, not on `PoolConfig`.
 - **Persistent reap**: `idle_since` column in DB tracks when a VM became idle. `reapIdleVms()` compares elapsed time against slot timeout — works across process restarts. `hal pool sync` and `hal pool warm` both trigger reap.
 - **Pre-warm pool**: `ProviderSlot.minReady` (env: `HAL_LIMA_MIN_READY`, `HAL_DO_MIN_READY`, or `HAL_MIN_READY`). `ensureWarm()` fires after release, acquire, reap, and reconcile. `hal pool warm` triggers reap + warm manually.
 - Warm pool: VMs are returned to pool after task completion, reaped after per-provider idle timeout
 - Streaming output: orchestrator pulls from VM to `data/logs/<task-id>.log`, CLI tails with 250ms polling
 - JSONL events: structured event stream per task in `data/events/<task-id>.jsonl`. Orchestrator emits typed events (task_start, vm_acquired, phase, output, task_end). `hal events <id>` for pretty-printed or `--raw` JSONL output.
 - Lima provider: `-p lima` flag, uses `limactl` CLI, SSH via localhost:<dynamic-port>, template path as snapshotId
+- Incus provider: `-p incus` flag, uses `incus` CLI, SSH via bridge IP (no port forwarding), published images as snapshots. KVM-backed VMs on Linux.
 - Lima VMs use `agent` user to match DO golden image conventions
-- Mixed pools: `-p lima,digitalocean` — comma-separated, first has highest priority. Each VM tracks its provider in DB. Pool fills local first, overflows to cloud.
+- Incus VMs use `agent` user, SSH key injected via `incus exec` after launch
+- Mixed pools: `-p lima,digitalocean` or `-p incus,digitalocean` — comma-separated, first has highest priority. Each VM tracks its provider in DB. Pool fills local first, overflows to cloud.
 - Per-provider env: `HAL_LIMA_MAX_POOL_SIZE`, `HAL_DO_SNAPSHOT_ID`, etc. Fall back to global `HAL_*` vars.
-- **Golden images**: `hal image build` creates `hal9999-golden` (Lima) or a DO snapshot for fast VM boot. Auto-detection: if `hal9999-golden` Lima instance exists, `hal run` uses `clone:` path automatically (skips cloud-init). `HAL_LIMA_TEMPLATE` env var overrides auto-detection. `clone:` prefix in snapshotId triggers `limactl clone` instead of template provisioning.
+- **Golden images**: `hal image build` creates `hal9999-golden` (Lima), `hal9999-golden-image` (Incus published image), or a DO snapshot for fast VM boot. Auto-detection: Lima checks for `hal9999-golden` instance (uses `clone:` prefix), Incus checks for `hal9999-golden-image` published image. `HAL_LIMA_TEMPLATE` / `HAL_INCUS_SNAPSHOT_ID` env vars override auto-detection.
 - **Branch/Push/PR**: every task creates a feature branch (`hal/<shortId>` by default, override with `--branch`). Orchestrator sets up the branch and git identity (`hal9999`) on the VM before the agent runs. Agent context is wrapped with instructions to commit, push, and create a PR. Wrapper script has fallback: commits uncommitted changes + pushes if the agent didn't. PR URL is captured from `gh pr view` and stored in `tasks.pr_url`. `--base` sets PR target (default: repo's default branch). `--no-pr` skips PR creation.
