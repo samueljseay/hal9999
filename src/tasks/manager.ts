@@ -13,11 +13,27 @@ export class TaskManager {
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
     this.db.run(
-      `INSERT INTO tasks (id, repo_url, context, status, created_at, updated_at)
-       VALUES (?, ?, ?, 'pending', ?, ?)`,
-      [id, opts.repoUrl, opts.context, now, now]
+      `INSERT INTO tasks (id, repo_url, context, status, branch, created_at, updated_at)
+       VALUES (?, ?, ?, 'pending', ?, ?, ?)`,
+      [id, opts.repoUrl, opts.context, opts.branch ?? null, now, now]
     );
     return this.getTask(id)!;
+  }
+
+  setBranch(taskId: string, branch: string): void {
+    const now = new Date().toISOString();
+    this.db.run(
+      `UPDATE tasks SET branch = ?, updated_at = ? WHERE id = ?`,
+      [branch, now, taskId]
+    );
+  }
+
+  setPrUrl(taskId: string, prUrl: string): void {
+    const now = new Date().toISOString();
+    this.db.run(
+      `UPDATE tasks SET pr_url = ?, updated_at = ? WHERE id = ?`,
+      [prUrl, now, taskId]
+    );
   }
 
   assignTask(taskId: string, vmId: string): TaskRow {

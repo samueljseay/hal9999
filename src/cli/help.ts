@@ -8,6 +8,9 @@ Run a task:
   hal run <repo> -m "instructions"        Run an agent on a repo
     -a, --agent <name>                    Agent: claude, opencode, goose, or custom (default: claude)
     -p, --provider <name>                 Provider: lima, do/digitalocean (default: lima)
+    -b, --branch <name>                   Feature branch name (default: hal/<shortId>)
+    --base <branch>                       PR target branch (default: repo default)
+    --no-pr                               Push branch but skip PR creation
 
 Task queries:
   hal ps [-s <status>]                    List tasks
@@ -20,6 +23,11 @@ Pool:
   hal pool ls [-s <status>]               List tracked VMs
   hal pool sync                           Reconcile DB with provider
   hal pool warm                           Reap idle VMs, top up warm pool
+
+Golden images:
+  hal image build [-p <provider>]         Build golden image for fast VM boot
+  hal image ls [-p <provider>]            List available golden images
+  hal image rm [-p <provider>]            Remove a golden image
 
 Infrastructure:
   hal vm ls                               List provider instances

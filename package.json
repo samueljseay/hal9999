@@ -11,5 +11,8 @@
   },
   "peerDependencies": {
     "typescript": "^5"
+  },
+  "dependencies": {
+    "picocolors": "^1.1.1"
   }
 }

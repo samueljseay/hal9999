@@ -1,28 +1,7 @@
 import { parseArgs } from "node:util";
-import { createProvider, type ProviderType } from "../providers/index.ts";
+import pc from "picocolors";
 import type { DigitalOceanProvider } from "../providers/digitalocean.ts";
-import { normalizeProvider, defaultProvider } from "./context.ts";
-
-function getProvider(argv: string[]): { provider: ReturnType<typeof createProvider>; providerType: ProviderType; rest: string[] } {
-  // Pre-scan for --provider flag
-  const providerIdx = argv.indexOf("--provider");
-  let providerType: ProviderType = defaultProvider();
-  const rest = [...argv];
-
-  if (providerIdx !== -1 && argv[providerIdx + 1]) {
-    providerType = normalizeProvider(argv[providerIdx + 1]!);
-    rest.splice(providerIdx, 2);
-  } else {
-    // Also check -p short form
-    const shortIdx = argv.indexOf("-p");
-    if (shortIdx !== -1 && argv[shortIdx + 1]) {
-      providerType = normalizeProvider(argv[shortIdx + 1]!);
-      rest.splice(shortIdx, 2);
-    }
-  }
-
-  return { provider: createProvider(providerType), providerType, rest };
-}
+import { getProvider, statusPad } from "./ui.ts";
 
 export async function vmCommand(argv: string[]): Promise<void> {
   const sub = argv[0];
@@ -118,10 +97,10 @@ Options:
     console.log("No instances found.");
     return;
   }
-  console.log(`${"ID".padEnd(40)} ${"LABEL".padEnd(20)} ${"STATUS".padEnd(10)} ${"IP".padEnd(16)} REGION`);
+  console.log(pc.dim(`${"ID".padEnd(40)} ${"LABEL".padEnd(20)} ${"STATUS".padEnd(10)} ${"IP".padEnd(16)} REGION`));
   for (const i of instances) {
     console.log(
-      `${i.id.padEnd(40)} ${i.label.padEnd(20)} ${i.status.padEnd(10)} ${i.ip.padEnd(16)} ${i.region}`
+      `${i.id.padEnd(40)} ${i.label.padEnd(20)} ${statusPad(i.status, 10)} ${i.ip.padEnd(16)} ${i.region}`
     );
   }
 }
@@ -408,11 +387,11 @@ Options:
     console.log("No snapshots found.");
     return;
   }
-  console.log(`${"ID".padEnd(40)} ${"DESCRIPTION".padEnd(30)} ${"STATUS".padEnd(10)} SIZE`);
+  console.log(pc.dim(`${"ID".padEnd(40)} ${"DESCRIPTION".padEnd(30)} ${"STATUS".padEnd(10)} SIZE`));
   for (const s of snapshots) {
     const sizeMb = (s.size / 1_000_000).toFixed(1);
     console.log(
-      `${s.id.padEnd(40)} ${s.description.padEnd(30)} ${s.status.padEnd(10)} ${sizeMb}MB`
+      `${s.id.padEnd(40)} ${s.description.padEnd(30)} ${statusPad(s.status, 10)} ${sizeMb}MB`
     );
   }
 }
@@ -486,7 +465,7 @@ Examples:
     console.log(`No images found${values.query ? ` matching "${values.query}"` : ""}.`);
     return;
   }
-  console.log(`${"ID".padEnd(12)} ${"SLUG".padEnd(24)} ${"NAME".padEnd(40)} DISTRO`);
+  console.log(pc.dim(`${"ID".padEnd(12)} ${"SLUG".padEnd(24)} ${"NAME".padEnd(40)} DISTRO`));
   for (const img of images) {
     console.log(
       `${String(img.id).padEnd(12)} ${(img.slug ?? "-").padEnd(24)} ${img.name.padEnd(40)} ${img.distribution}`

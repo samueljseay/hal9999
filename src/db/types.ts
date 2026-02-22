@@ -38,6 +38,8 @@ export interface TaskRow {
   vm_id: string | null;
   result: string | null;
   exit_code: number | null;
+  branch: string | null;
+  pr_url: string | null;
   created_at: string;
   updated_at: string;
   started_at: string | null;

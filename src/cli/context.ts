@@ -52,6 +52,9 @@ export interface OrchestratorOpts {
   agent?: string;
   region?: string;
   plan?: string;
+  branch?: string;
+  base?: string;
+  noPr?: boolean;
 }
 
 /** Per-provider idle timeout defaults (seconds) */
@@ -59,6 +62,22 @@ const IDLE_TIMEOUT_DEFAULTS: Record<string, number> = {
   lima: 1800,        // 30 min — free, keep warm
   digitalocean: 300, // 5 min — costs money
 };
+
+/** Sync check for hal9999-golden Lima instance. Uses clone: prefix if found. */
+function resolveLimaSnapshotId(): string {
+  if (process.env.HAL_LIMA_TEMPLATE) return process.env.HAL_LIMA_TEMPLATE;
+  const result = Bun.spawnSync(
+    ["limactl", "list", "hal9999-golden", "--json"],
+    { stdout: "pipe", stderr: "pipe" }
+  );
+  if (result.exitCode === 0) {
+    const stdout = new TextDecoder().decode(result.stdout);
+    if (stdout.includes("hal9999-golden")) {
+      return "clone:hal9999-golden";
+    }
+  }
+  return "src/image/hal9999.yaml";
+}
 
 export function buildProviderSlots(opts: OrchestratorOpts): ProviderSlot[] {
   const providerStr = opts.provider ?? defaultProvider();
@@ -69,7 +88,7 @@ export function buildProviderSlots(opts: OrchestratorOpts): ProviderSlot[] {
 
     const prefix = name === "digitalocean" ? "DO" : name.toUpperCase();
     const snapshotId = name === "lima"
-      ? (process.env.HAL_LIMA_TEMPLATE ?? "src/image/hal9999.yaml")
+      ? resolveLimaSnapshotId()
       : (process.env[`HAL_${prefix}_SNAPSHOT_ID`] ?? process.env.HAL_SNAPSHOT_ID);
 
     if (!snapshotId) {

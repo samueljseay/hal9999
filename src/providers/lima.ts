@@ -70,6 +70,31 @@ export class LimaProvider implements Provider {
     return result.stdout;
   }
 
+  /** Run limactl with inherited stdio (output goes straight to terminal) */
+  private async execInherit(args: string[], timeoutMs = 60_000): Promise<void> {
+    const proc = Bun.spawn(["limactl", ...args], {
+      stdin: "ignore",
+      stdout: "inherit",
+      stderr: "inherit",
+    });
+
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      proc.kill();
+    }, timeoutMs);
+
+    const exitCode = await proc.exited;
+    clearTimeout(timer);
+
+    if (timedOut) {
+      throw new Error(`limactl ${args[0]} timed out after ${timeoutMs}ms`);
+    }
+    if (exitCode !== 0) {
+      throw new Error(`limactl ${args[0]} failed (exit ${exitCode})`);
+    }
+  }
+
   private async getLimaInstance(name: string): Promise<LimaInstance | null> {
     const result = await this.exec(["list", name, "--json"]);
     if (result.exitCode !== 0) return null;
@@ -115,13 +140,24 @@ export class LimaProvider implements Provider {
   async createInstance(opts: CreateInstanceOptions): Promise<Instance> {
     const name = opts.label ?? `hal9999-${Date.now()}`;
     const template = opts.snapshotId || this.templatePath;
+    const verbose = process.env.HAL_VERBOSE === "1";
+    const run = verbose
+      ? (args: string[], timeout: number) => this.execInherit(args, timeout)
+      : (args: string[], timeout: number) => this.execOrThrow(args, timeout);
 
-    // Create and start in one step
-    // First run can take 10+ min (image download + provisioning)
-    await this.execOrThrow(
-      ["start", "--name", name, template, "--tty=false"],
-      600_000 // 10 min
-    );
+    if (template.startsWith("clone:")) {
+      // Clone-based creation: deep-copy a golden image's disk+config
+      const goldenName = template.slice("clone:".length);
+      await run(["clone", "--tty=false", goldenName, name], 120_000);
+      await run(["start", name, "--tty=false"], 120_000);
+    } else {
+      // Template-based creation: full cloud-init provisioning
+      // First run can take 10+ min (image download + provisioning)
+      await run(
+        ["start", "--name", name, template, "--tty=false"],
+        600_000 // 10 min
+      );
+    }
 
     const raw = await this.getLimaInstance(name);
     if (!raw) throw new Error(`Lima instance ${name} created but not found in list`);

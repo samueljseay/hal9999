@@ -1,7 +1,9 @@
 import { parseArgs } from "node:util";
+import pc from "picocolors";
 import type { TaskStatus } from "../db/types.ts";
 import { taskManager } from "./context.ts";
 import { shortId } from "./resolve.ts";
+import { statusPad } from "./ui.ts";
 
 function relativeTime(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
@@ -47,12 +49,12 @@ Options:
     return;
   }
 
-  console.log(`${"ID".padEnd(10)} ${"STATUS".padEnd(12)} ${"REPO".padEnd(36)} CREATED`);
+  console.log(pc.dim(`${"ID".padEnd(10)} ${"STATUS".padEnd(12)} ${"REPO".padEnd(36)} CREATED`));
   for (const t of tasks) {
     const repo = stripGitHub(t.repo_url);
     const display = repo.length > 34 ? repo.slice(-34) : repo;
     console.log(
-      `${shortId(t.id).padEnd(10)} ${t.status.padEnd(12)} ${display.padEnd(36)} ${relativeTime(t.created_at)}`
+      `${shortId(t.id).padEnd(10)} ${statusPad(t.status, 12)} ${display.padEnd(36)} ${relativeTime(t.created_at)}`
     );
   }
 }

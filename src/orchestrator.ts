@@ -13,6 +13,12 @@ export interface OrchestratorConfig {
   agent: AgentConfig;
 }
 
+export interface TaskOpts {
+  branch?: string;
+  base?: string;
+  noPr?: boolean;
+}
+
 const HAL_DIR = "/workspace/.hal";
 const OUTPUT_LOG = `${HAL_DIR}/output.log`;
 const DONE_SENTINEL = `${HAL_DIR}/done`;
@@ -36,23 +42,23 @@ export class Orchestrator {
    * Start a task in the background. Returns the task ID immediately.
    * The task runs asynchronously — use `tailLog` to watch output.
    */
-  startTask(repoUrl: string, context: string): string {
+  startTask(repoUrl: string, context: string, opts: TaskOpts = {}): string {
     const task = this.tasks.createTask({ repoUrl, context });
     // Fire and forget — errors are captured in the DB
-    this.executeTask(task.id, repoUrl, context);
+    this.executeTask(task.id, repoUrl, context, opts);
     return task.id;
   }
 
   /**
    * Run a task and wait for it to complete. Returns the final TaskRow.
    */
-  async runTask(repoUrl: string, context: string): Promise<TaskRow> {
+  async runTask(repoUrl: string, context: string, opts: TaskOpts = {}): Promise<TaskRow> {
     const task = this.tasks.createTask({ repoUrl, context });
-    await this.executeTask(task.id, repoUrl, context);
+    await this.executeTask(task.id, repoUrl, context, opts);
     return this.tasks.getTask(task.id)!;
   }
 
-  private async executeTask(taskId: string, repoUrl: string, context: string): Promise<void> {
+  private async executeTask(taskId: string, repoUrl: string, context: string, opts: TaskOpts = {}): Promise<void> {
     const log = createLogWriter(taskId);
     const events = createEventWriter(taskId);
     const agent = this.config.agent;
@@ -63,7 +69,7 @@ export class Orchestrator {
 
     let vm: VmRow | undefined;
     try {
-      vm = await this.setupTask(taskId, repoUrl, context, log, events);
+      vm = await this.setupTask(taskId, repoUrl, context, log, events, opts);
       await this.pollForCompletion(taskId, vm, log, events);
       await this.collectResults(taskId, vm, log, events);
     } catch (err) {
@@ -96,6 +102,7 @@ export class Orchestrator {
     context: string,
     log: ReturnType<typeof createLogWriter>,
     events: ReturnType<typeof createEventWriter>,
+    opts: TaskOpts = {},
   ): Promise<VmRow> {
     const agent = this.config.agent;
     const githubToken = agent.env?.GITHUB_TOKEN;
@@ -167,8 +174,47 @@ export class Orchestrator {
       }
     }
 
+    // Set up feature branch and git identity
+    const shortTaskId = taskId.slice(0, 8);
+    const branch = opts.branch ?? `hal/${shortTaskId}`;
+    log.writeHeader("setting up branch");
+    events.emit({ type: "phase", name: "branch_setup" });
+
+    // Detect default branch for PR base
+    const defaultBranchResult = await sshExec({
+      host: vm.ip!,
+      port: sshPort,
+      command: `cd ${workdir} && git rev-parse --abbrev-ref HEAD`,
+      timeoutMs: 10_000,
+    });
+    const base = opts.base ?? (defaultBranchResult.stdout.trim() || "main");
+
+    // Create feature branch and configure git identity
+    const branchSetup = await sshExec({
+      host: vm.ip!,
+      port: sshPort,
+      command: [
+        `cd ${workdir}`,
+        `git checkout -b ${branch}`,
+        `git config user.name "hal9999"`,
+        `git config user.email "hal9999@noreply"`,
+      ].join(" && "),
+      timeoutMs: 10_000,
+    });
+    if (branchSetup.exitCode !== 0) {
+      throw new Error(`Branch setup failed: ${branchSetup.stderr}`);
+    }
+    this.tasks.setBranch(taskId, branch);
+    log.append(`Branch: ${branch} (base: ${base})\n`);
+
+    // Wrap user context with branch/push/PR instructions
+    const prInstruction = opts.noPr
+      ? ""
+      : `3. Create a PR to ${base}: gh pr create --base ${base} --fill\n`;
+    const wrappedContext = `You are working on branch "${branch}". When done:\n1. Commit your changes with a clear message\n2. Push the branch: git push origin ${branch}\n${prInstruction}\nTask:\n${context}`;
+
     // Generate and upload wrapper script, then launch with nohup
-    const wrapperScript = generateWrapperScript(agent, context, workdir, githubToken);
+    const wrapperScript = generateWrapperScript(agent, wrappedContext, workdir, githubToken, branch, opts.noPr);
     const scriptBase64 = Buffer.from(wrapperScript).toString("base64");
 
     log.writeHeader(`launching ${agent.name} agent`);
@@ -298,17 +344,31 @@ export class Orchestrator {
     });
     diffStat = diffResult.stdout.trim();
 
+    // Fetch PR URL if captured
+    const prUrlResult = await sshExec({
+      host: vm.ip!,
+      port: sshPort,
+      command: `cat ${RESULT_DIR}/pr-url.txt 2>/dev/null || true`,
+      timeoutMs: 10_000,
+    });
+    const prUrl = prUrlResult.stdout.trim() || null;
+    if (prUrl) {
+      this.tasks.setPrUrl(taskId, prUrl);
+    }
+
     const result = diffStat || `exit code ${exitCodeValid}`;
 
     if (exitCodeValid === 0) {
       this.tasks.completeTask(taskId, result, 0);
       log.append(`\nTask completed successfully\n`);
       if (diffStat) log.append(`\nDiff stat:\n${diffStat}\n`);
-      events.emit({ type: "task_end", status: "completed", exitCode: 0 });
+      if (prUrl) log.append(`PR: ${prUrl}\n`);
+      events.emit({ type: "task_end", status: "completed", exitCode: 0, prUrl: prUrl ?? undefined });
     } else {
       this.tasks.failTask(taskId, result, exitCodeValid);
       log.append(`\nTask failed (exit ${exitCodeValid})\n`);
-      events.emit({ type: "task_end", status: "failed", exitCode: exitCodeValid, error: result });
+      if (prUrl) log.append(`PR: ${prUrl}\n`);
+      events.emit({ type: "task_end", status: "failed", exitCode: exitCodeValid, error: result, prUrl: prUrl ?? undefined });
     }
   }
 
@@ -445,6 +505,8 @@ function generateWrapperScript(
   context: string,
   workdir: string,
   githubToken?: string,
+  branch?: string,
+  noPr?: boolean,
 ): string {
   const agentCommand = expandAgentCommand(agent.command, { context, workdir });
 
@@ -486,9 +548,25 @@ cd ${workdir}
 ${agentCommand} >> ${OUTPUT_LOG} 2>&1
 EXIT_CODE=$?
 
+# Disable strict mode for cleanup — sentinel MUST be written
+set +uo pipefail
+
+# Fallback: commit and push if agent didn't already
+cd ${workdir}
+if ! git diff --quiet HEAD 2>/dev/null || ! git diff --cached --quiet HEAD 2>/dev/null; then
+  git add -A
+  git commit -m "hal9999: automated changes" || true
+fi
+${branch ? `git push origin ${branch} 2>/dev/null || true` : ""}
+${branch && !noPr ? `
+# Capture PR URL if one exists
+PR_URL=$(gh pr view --json url -q '.url' 2>/dev/null || true)
+echo "$PR_URL" > ${RESULT_DIR}/pr-url.txt
+` : ""}
+
 # Capture git diff artifacts
 mkdir -p ${RESULT_DIR}
-git diff --stat HEAD > ${RESULT_DIR}/diff-stat.txt 2>/dev/null || true
+git diff --stat HEAD 2>/dev/null | head -20 > ${RESULT_DIR}/diff-stat.txt || true
 git diff HEAD > ${RESULT_DIR}/diff.patch 2>/dev/null || true
 
 # Write sentinel file with exit code

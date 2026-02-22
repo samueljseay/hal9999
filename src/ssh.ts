@@ -66,18 +66,20 @@ export async function waitForSsh(
   port?: number,
   onProgress?: (message: string) => void,
 ): Promise<void> {
+  const pc = await import("picocolors");
   const start = Date.now();
   let attempt = 0;
   const target = port ? `${host}:${port}` : host;
-  const log = (msg: string) => {
+  const log = (msg: string, raw?: string) => {
     console.log(msg);
-    onProgress?.(msg);
+    onProgress?.(raw ?? msg);
   };
 
   while (Date.now() - start < timeoutMs) {
     attempt++;
     const elapsed = Math.round((Date.now() - start) / 1000);
-    log(`SSH probe ${attempt} to ${target} (${elapsed}s elapsed)...`);
+    const raw = `SSH probe ${attempt} to ${target} (${elapsed}s elapsed)...`;
+    log(pc.default.dim(raw), raw);
 
     const args = buildSshArgs(user, host, port, "echo ok");
     const proc = Bun.spawn(args, { stdout: "pipe", stderr: "pipe" });
@@ -85,13 +87,15 @@ export async function waitForSsh(
     const stderr = await new Response(proc.stderr).text();
     const exitCode = await proc.exited;
     if (exitCode === 0) {
-      log(`SSH ready on ${target}`);
+      const raw = `SSH ready on ${target}`;
+      log(pc.default.green(raw), raw);
       return;
     }
 
     // Log auth failures differently from connection failures
     if (stderr.includes("Permission denied")) {
-      log(`SSH probe ${attempt}: auth failed (key mismatch?)`);
+      const raw = `SSH probe ${attempt}: auth failed (key mismatch?)`;
+      log(pc.default.yellow(raw), raw);
     }
 
     await new Promise((r) => setTimeout(r, 5_000));

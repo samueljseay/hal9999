@@ -22,9 +22,11 @@ Hardware-independent agentic coding system. Spawns VMs with coding agents that w
 - `src/cli/show.ts` — `hal show <id>` — full task details
 - `src/cli/pool.ts` — `hal pool [ls|sync|warm]` — pool management
 - `src/cli/vm.ts` — `hal vm <cmd>` — infrastructure commands
+- `src/cli/image.ts` — `hal image [build|ls|rm]` — golden image management
 - `src/cli/context.ts` — Lazy db/taskManager/poolManager/orchestrator factories
 - `src/cli/resolve.ts` — Short ID prefix → full UUID resolution
 - `src/cli/help.ts` — Help text
+- `src/cli/ui.ts` — Shared UI: HAL spinner, `getProvider()`, `statusColor()`/`statusPad()`
 
 ### Core
 - `src/providers/types.ts` — Provider interface and shared types
@@ -79,3 +81,5 @@ Hardware-independent agentic coding system. Spawns VMs with coding agents that w
 - Lima VMs use `agent` user to match DO golden image conventions
 - Mixed pools: `-p lima,digitalocean` — comma-separated, first has highest priority. Each VM tracks its provider in DB. Pool fills local first, overflows to cloud.
 - Per-provider env: `HAL_LIMA_MAX_POOL_SIZE`, `HAL_DO_SNAPSHOT_ID`, etc. Fall back to global `HAL_*` vars.
+- **Golden images**: `hal image build` creates `hal9999-golden` (Lima) or a DO snapshot for fast VM boot. Auto-detection: if `hal9999-golden` Lima instance exists, `hal run` uses `clone:` path automatically (skips cloud-init). `HAL_LIMA_TEMPLATE` env var overrides auto-detection. `clone:` prefix in snapshotId triggers `limactl clone` instead of template provisioning.
+- **Branch/Push/PR**: every task creates a feature branch (`hal/<shortId>` by default, override with `--branch`). Orchestrator sets up the branch and git identity (`hal9999`) on the VM before the agent runs. Agent context is wrapped with instructions to commit, push, and create a PR. Wrapper script has fallback: commits uncommitted changes + pushes if the agent didn't. PR URL is captured from `gh pr view` and stored in `tasks.pr_url`. `--base` sets PR target (default: repo's default branch). `--no-pr` skips PR creation.

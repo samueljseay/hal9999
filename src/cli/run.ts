@@ -1,7 +1,9 @@
 import { parseArgs } from "node:util";
+import pc from "picocolors";
 import { orchestrator, normalizeProvider, defaultProvider } from "./context.ts";
 import { shortId } from "./resolve.ts";
 import { tailLog } from "../logs.ts";
+import { hal } from "./ui.ts";
 
 function normalizeRepo(input: string): string {
   // Already a full URL
@@ -25,6 +27,10 @@ export async function runCommand(argv: string[]): Promise<void> {
       provider: { type: "string", short: "p" },
       region: { type: "string" },
       plan: { type: "string" },
+      branch: { type: "string", short: "b" },
+      base: { type: "string" },
+      "no-pr": { type: "boolean", default: false },
+      verbose: { type: "boolean", short: "v", default: false },
       help: { type: "boolean", short: "h", default: false },
     },
   });
@@ -42,13 +48,19 @@ Options:
   -m, --message <text>    Task instructions (required)
   -a, --agent <name>      Agent: claude, opencode, goose, or custom cmd (default: claude)
   -p, --provider <name>   Provider: lima, do/digitalocean (default: lima)
+  -b, --branch <name>     Feature branch name (default: hal/<shortId>)
+  --base <branch>         PR target branch (default: repo's default branch)
+  --no-pr                 Push branch but skip PR creation
   --region <region>       Region for cloud provider (default: nyc1)
   --plan <plan>           Instance size/plan (default: s-1vcpu-1gb)
+  -v, --verbose           Show detailed VM provisioning output
   -h, --help              Show this help
 
 Examples:
   hal run owner/repo -m "fix the bug"
   hal run owner/repo -m "add tests" -a goose
+  hal run owner/repo -m "fix" --branch fix/bug --base main
+  hal run owner/repo -m "explore" --no-pr
   hal run https://github.com/org/repo -m "refactor" -p do`);
     return;
   }
@@ -64,7 +76,14 @@ Examples:
   }
 
   const repoUrl = normalizeRepo(repo);
+  if (values.verbose) process.env.HAL_VERBOSE = "1";
   const providerStr = values.provider ? normalizeProvider(values.provider) : defaultProvider();
+
+  const taskOpts = {
+    branch: values.branch,
+    base: values.base,
+    noPr: values["no-pr"],
+  };
 
   const orch = orchestrator({
     provider: providerStr,
@@ -73,25 +92,56 @@ Examples:
     plan: values.plan,
   });
 
-  const taskId = orch.startTask(repoUrl, message);
+  const taskId = orch.startTask(repoUrl, message, taskOpts);
   const short = shortId(taskId);
-  console.log(`Task ${short} started. Streaming output...\n`);
+
+  const spinner = hal(`Task ${short} provisioning...`);
 
   const ac = new AbortController();
   process.on("SIGINT", () => {
+    spinner.stop();
     ac.abort();
-    console.log(`\nDetached. Task is still running.`);
-    console.log(`Reconnect: hal logs ${short}`);
+    const t = orch.tasks.getTask(taskId);
+    const status = t?.status ?? "unknown";
+
+    if (status === "running") {
+      console.log(pc.yellow(`\nAgent still running on VM. Output collection stopped.`));
+      console.log(`Resume: hal run is needed to poll for results.`);
+      console.log(`Check status: hal show ${short}`);
+    } else if (status === "completed" || status === "failed") {
+      console.log(`\nTask already ${status}.`);
+      console.log(`Details: hal show ${short}`);
+    } else {
+      // pending, assigned — still setting up
+      console.log(pc.yellow(`\nVM still provisioning. Agent not yet launched.`));
+      console.log(`Check status: hal show ${short}`);
+    }
     process.exit(0);
   });
 
   await tailLog(taskId, () => {
     const t = orch.tasks.getTask(taskId);
+    // Stop spinner once we have any output (task is running)
+    if (t?.status === "running") {
+      spinner.stop(`Task ${short} started. Streaming output...\n`);
+    }
     return t?.status === "completed" || t?.status === "failed";
   }, ac.signal);
 
+  spinner.stop(); // no-op if already stopped
+
   const finalTask = orch.tasks.getTask(taskId);
   if (finalTask) {
-    console.log(`\nTask ${finalTask.status} (exit ${finalTask.exit_code ?? "?"})`);
+    if (finalTask.status === "completed") {
+      console.log(pc.green(`\nTask completed (exit ${finalTask.exit_code ?? 0})`));
+    } else if (finalTask.status === "failed") {
+      console.log(pc.red(`\nTask failed (exit ${finalTask.exit_code ?? "?"})`));
+      if (finalTask.result) console.log(`Error: ${finalTask.result}`);
+    }
+    if (finalTask.pr_url) {
+      console.log(pc.cyan(`PR: ${finalTask.pr_url}`));
+    } else if (finalTask.branch) {
+      console.log(pc.dim(`Branch: ${finalTask.branch}`));
+    }
   }
 }

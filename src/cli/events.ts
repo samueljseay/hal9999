@@ -1,4 +1,5 @@
 import { parseArgs } from "node:util";
+import pc from "picocolors";
 import { db, taskManager } from "./context.ts";
 import { resolveTaskId } from "./resolve.ts";
 import { readEvents, tailEvents } from "../events/index.ts";
@@ -9,20 +10,22 @@ function printEvent(env: EventEnvelope): void {
   const e = env.event;
   switch (e.type) {
     case "task_start":
-      console.log(`[${ts}] TASK START  repo=${e.repoUrl} agent=${e.agent}`);
+      console.log(pc.bold(`[${ts}] TASK START  repo=${e.repoUrl} agent=${e.agent}`));
       break;
     case "vm_acquired":
       console.log(`[${ts}] VM ACQUIRED vm=${e.vmId} provider=${e.provider} ip=${e.ip}`);
       break;
     case "phase":
-      console.log(`[${ts}] PHASE       ${e.name}`);
+      console.log(pc.dim(`[${ts}] PHASE       ${e.name}`));
       break;
     case "output":
       process.stdout.write(e.text);
       break;
-    case "task_end":
-      console.log(`\n[${ts}] TASK END    status=${e.status} exit=${e.exitCode ?? "?"}${e.error ? ` error=${e.error}` : ""}`);
+    case "task_end": {
+      const status = e.status === "completed" ? pc.green(e.status) : pc.red(e.status);
+      console.log(pc.bold(`\n[${ts}] TASK END    status=${status} exit=${e.exitCode ?? "?"}${e.error ? ` error=${e.error}` : ""}`));
       break;
+    }
   }
 }
 

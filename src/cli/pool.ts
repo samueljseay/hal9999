@@ -1,7 +1,9 @@
 import { parseArgs } from "node:util";
+import pc from "picocolors";
 import type { VmRow, VmStatus } from "../db/types.ts";
 import { db, poolManager, orchestrator, normalizeProvider, defaultProvider } from "./context.ts";
 import { shortId } from "./resolve.ts";
+import { statusPad } from "./ui.ts";
 
 function relativeTime(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
@@ -59,10 +61,10 @@ Options:
   if (!sub || sub === "status") {
     const stats = poolManager().getPoolStats();
     console.log("Pool Status:");
-    console.log(`  Provisioning: ${stats.provisioning}`);
-    console.log(`  Ready:        ${stats.ready}`);
-    console.log(`  Assigned:     ${stats.assigned}`);
-    console.log(`  Total active: ${stats.total}`);
+    console.log(`  Provisioning: ${pc.yellow(String(stats.provisioning))}`);
+    console.log(`  Ready:        ${pc.green(String(stats.ready))}`);
+    console.log(`  Assigned:     ${pc.yellow(String(stats.assigned))}`);
+    console.log(`  Total active: ${String(stats.total)}`);
     if (Object.keys(stats.byProvider).length > 0) {
       console.log("  By provider:");
       for (const [name, count] of Object.entries(stats.byProvider)) {
@@ -87,13 +89,13 @@ Options:
       return;
     }
     console.log(
-      `${"VM".padEnd(12)} ${"STATUS".padEnd(14)} ${"PROVIDER".padEnd(14)} ${"IP".padEnd(16)} ${"TASK".padEnd(10)} ${"AGE".padEnd(6)} IDLE`
+      pc.dim(`${"VM".padEnd(12)} ${"STATUS".padEnd(14)} ${"PROVIDER".padEnd(14)} ${"IP".padEnd(16)} ${"TASK".padEnd(10)} ${"AGE".padEnd(6)} IDLE`)
     );
     for (const vm of vms) {
       const age = relativeTime(vm.created_at);
       const idle = vm.idle_since ? relativeTime(vm.idle_since) : "-";
       console.log(
-        `${vmDisplayId(vm).padEnd(12)} ${vm.status.padEnd(14)} ${vm.provider.padEnd(14)} ${(vm.ip ?? "-").padEnd(16)} ${(vm.task_id ? shortId(vm.task_id) : "-").padEnd(10)} ${age.padEnd(6)} ${idle}`
+        `${vmDisplayId(vm).padEnd(12)} ${statusPad(vm.status, 14)} ${vm.provider.padEnd(14)} ${(vm.ip ?? "-").padEnd(16)} ${(vm.task_id ? shortId(vm.task_id) : "-").padEnd(10)} ${age.padEnd(6)} ${idle}`
       );
     }
     return;
@@ -115,7 +117,7 @@ Options:
 
     const reaped = await pool.reapIdleVms();
     if (reaped > 0) {
-      console.log(`Reaped ${reaped} idle VM(s)`);
+      console.log(`Reaped ${pc.yellow(String(reaped))} idle VM(s)`);
     } else {
       console.log("No idle VMs to reap");
     }
@@ -123,7 +125,7 @@ Options:
     pool.ensureWarm();
 
     const stats = pool.getPoolStats();
-    console.log(`Pool: ${stats.ready} ready, ${stats.provisioning} provisioning, ${stats.assigned} assigned`);
+    console.log(`Pool: ${pc.green(String(stats.ready))} ready, ${pc.yellow(String(stats.provisioning))} provisioning, ${pc.yellow(String(stats.assigned))} assigned`);
     for (const slot of slots) {
       if (slot.minReady > 0) {
         console.log(`  ${slot.name}: minReady=${slot.minReady}, idleTimeout=${slot.idleTimeoutMs / 1000}s`);

@@ -6,6 +6,7 @@ import { eventsCommand } from "./events.ts";
 import { showCommand } from "./show.ts";
 import { poolCommand } from "./pool.ts";
 import { vmCommand } from "./vm.ts";
+import { imageCommand } from "./image.ts";
 
 function deprecation(oldCmd: string, newCmd: string): void {
   console.error(`\x1b[33mDeprecation:\x1b[0m "hal ${oldCmd}" is now "hal ${newCmd}"\n`);
@@ -80,6 +81,8 @@ async function main(): Promise<void> {
       return poolCommand(rest);
     case "vm":
       return vmCommand(rest);
+    case "image":
+      return imageCommand(rest);
     default:
       console.error(`Unknown command: ${command}`);
       printHelp();

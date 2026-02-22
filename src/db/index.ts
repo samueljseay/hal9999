@@ -37,6 +37,15 @@ function migrate(db: Database): void {
   if (cols.length > 0 && !cols.some((c) => c.name === "idle_since")) {
     db.exec("ALTER TABLE vms ADD COLUMN idle_since TEXT");
   }
+
+  // Task migrations
+  const taskCols = db.query<{ name: string }, []>("PRAGMA table_info(tasks)").all();
+  if (taskCols.length > 0 && !taskCols.some((c) => c.name === "branch")) {
+    db.exec("ALTER TABLE tasks ADD COLUMN branch TEXT");
+  }
+  if (taskCols.length > 0 && !taskCols.some((c) => c.name === "pr_url")) {
+    db.exec("ALTER TABLE tasks ADD COLUMN pr_url TEXT");
+  }
 }
 
 function initSchema(db: Database): void {
@@ -66,6 +75,8 @@ function initSchema(db: Database): void {
       vm_id         TEXT,
       result        TEXT,
       exit_code     INTEGER,
+      branch        TEXT,
+      pr_url        TEXT,
       created_at    TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
       started_at    TEXT,
