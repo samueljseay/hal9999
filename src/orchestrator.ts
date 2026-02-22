@@ -221,35 +221,34 @@ export class Orchestrator {
     log.writeHeader(`launching ${agent.name} agent`);
     events.emit({ type: "phase", name: "agent_launch" });
 
-    // Upload script via stdin (avoids huge command-line strings for plan-first mode)
-    await sshExec({
-      host: vm.ip!,
-      port: sshPort,
-      command: `mkdir -p ${HAL_DIR} ${RESULT_DIR}`,
-      timeoutMs: 10_000,
-    });
-
-    const uploadArgs = buildSshArgs("agent", vm.ip!, sshPort, `base64 -d > ${RUN_SCRIPT}`);
-    const uploadProc = Bun.spawn(uploadArgs, {
+    // Upload + launch in a single SSH session via stdin pipe.
+    // base64 reads stdin to EOF (Bun closes pipe after writing), then the rest runs.
+    // `exit 0` forces the shell to terminate after backgrounding — prevents SSH hangs.
+    const uploadAndLaunchArgs = buildSshArgs(
+      "agent", vm.ip!, sshPort,
+      `mkdir -p ${HAL_DIR} ${RESULT_DIR} && base64 -d > ${RUN_SCRIPT} && chmod +x ${RUN_SCRIPT} && nohup ${RUN_SCRIPT} </dev/null >/dev/null 2>&1 & exit 0`
+    );
+    const launchProc = Bun.spawn(uploadAndLaunchArgs, {
       stdin: Buffer.from(scriptBase64),
       stdout: "pipe",
       stderr: "pipe",
     });
-    const uploadExit = await uploadProc.exited;
-    if (uploadExit !== 0) {
-      const stderr = await new Response(uploadProc.stderr).text();
-      throw new Error(`Failed to upload wrapper script: ${stderr}`);
-    }
 
-    // Launch with nohup — redirect all FDs and disown to avoid SSH session hanging
-    const launchResult = await sshExec({
-      host: vm.ip!,
-      port: sshPort,
-      command: `chmod +x ${RUN_SCRIPT} && nohup ${RUN_SCRIPT} > /dev/null 2>&1 < /dev/null & disown`,
-      timeoutMs: 15_000,
-    });
-    if (launchResult.exitCode !== 0) {
-      throw new Error(`Failed to launch wrapper script: ${launchResult.stderr}`);
+    let launchTimedOut = false;
+    const launchTimer = setTimeout(() => {
+      launchTimedOut = true;
+      launchProc.kill();
+    }, 30_000);
+
+    const launchStderr = await new Response(launchProc.stderr).text();
+    const launchExit = await launchProc.exited;
+    clearTimeout(launchTimer);
+
+    if (launchTimedOut) {
+      throw new Error("Script upload+launch timed out after 30s");
+    }
+    if (launchExit !== 0) {
+      throw new Error(`Failed to upload/launch wrapper script: ${launchStderr}`);
     }
 
     // Agent is now running independently on the VM
