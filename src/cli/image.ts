@@ -2,6 +2,7 @@ import pc from "picocolors";
 import type { DigitalOceanProvider } from "../providers/digitalocean.ts";
 import { sshExec, waitForSsh } from "../ssh.ts";
 import { getProvider, statusPad } from "./ui.ts";
+import { db } from "./context.ts";
 
 const GOLDEN_NAME = "hal9999-golden";
 
@@ -102,6 +103,7 @@ async function buildLimaGolden(): Promise<void> {
       console.error(`Failed to delete existing ${GOLDEN_NAME}: ${new TextDecoder().decode(delResult.stderr)}`);
       process.exit(1);
     }
+    unregisterImage(GOLDEN_NAME);
     console.log("Existing golden image removed.");
   }
 
@@ -127,6 +129,9 @@ async function buildLimaGolden(): Promise<void> {
     console.error(`Failed to stop ${GOLDEN_NAME}`);
     process.exit(1);
   }
+
+  // Register in DB so reconcile knows this is an image, not an orphan VM
+  registerImage(GOLDEN_NAME, "lima", GOLDEN_NAME);
 
   console.log(`\nGolden image "${GOLDEN_NAME}" ready.`);
   console.log("New VMs will automatically use clone-based fast boot.");
@@ -493,6 +498,7 @@ Options:
       console.error(`Failed to delete: ${stderr}`);
       process.exit(1);
     }
+    unregisterImage(GOLDEN_NAME);
     console.log("Done.");
   } else if (providerType === "incus") {
     const GOLDEN_IMAGE = "hal9999-golden-image";
@@ -523,4 +529,18 @@ Options:
     await provider.deleteSnapshot(snapshotId);
     console.log("Done.");
   }
+}
+
+/** Register a golden image so reconcile knows it's not an orphaned VM */
+function registerImage(id: string, provider: string, instanceId: string): void {
+  const now = new Date().toISOString();
+  db().run(
+    `INSERT OR REPLACE INTO images (id, provider, instance_id, created_at) VALUES (?, ?, ?, ?)`,
+    [id, provider, instanceId, now]
+  );
+}
+
+/** Remove a golden image registration */
+function unregisterImage(id: string): void {
+  db().run(`DELETE FROM images WHERE id = ?`, [id]);
 }

@@ -88,9 +88,17 @@ function initSchema(db: Database): void {
       completed_at  TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS images (
+      id            TEXT PRIMARY KEY,
+      provider      TEXT NOT NULL,
+      instance_id   TEXT NOT NULL,
+      created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
     CREATE INDEX IF NOT EXISTS idx_vms_status ON vms(status);
     CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
     CREATE INDEX IF NOT EXISTS idx_vms_task_id ON vms(task_id);
     CREATE INDEX IF NOT EXISTS idx_tasks_vm_id ON tasks(vm_id);
+    CREATE INDEX IF NOT EXISTS idx_images_instance_id ON images(instance_id);
   `);
 }

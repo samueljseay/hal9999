@@ -30,6 +30,13 @@ export type TaskStatus =
   | "completed"
   | "failed";
 
+export interface ImageRow {
+  id: string;
+  provider: string;
+  instance_id: string;
+  created_at: string;
+}
+
 export interface TaskRow {
   id: string;
   slug: string | null;
