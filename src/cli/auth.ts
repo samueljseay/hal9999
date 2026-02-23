@@ -3,36 +3,64 @@ import pc from "picocolors";
 import { CREDENTIAL_KEYS, getStore, getCredentialStatuses } from "../auth/index.ts";
 import type { CredentialKey } from "../auth/index.ts";
 
-const TOKEN_HELP: Record<CredentialKey, { description: string; url: string; pattern?: RegExp; hint?: string }> = {
+const TOKEN_META: Record<CredentialKey, { pattern?: RegExp; hint?: string }> = {
   GITHUB_TOKEN: {
-    description: "GitHub personal access token (for repo cloning, PR creation)",
-    url: "https://github.com/settings/tokens",
     pattern: /^(ghp_|gho_|github_pat_)/,
     hint: "should start with ghp_, gho_, or github_pat_",
   },
-  CLAUDE_CODE_OAUTH_TOKEN: {
-    description: "Claude Code OAuth token (for Claude agent)",
-    url: "https://console.anthropic.com",
-  },
+  CLAUDE_CODE_OAUTH_TOKEN: {},
   ANTHROPIC_API_KEY: {
-    description: "Anthropic API key (for Claude/OpenCode/Goose agents)",
-    url: "https://console.anthropic.com/settings/keys",
     pattern: /^sk-ant-/,
     hint: "should start with sk-ant-",
   },
   DO_API_TOKEN: {
-    description: "DigitalOcean API token (for cloud VMs)",
-    url: "https://cloud.digitalocean.com/account/api/tokens",
     pattern: /^dop_v1_/,
     hint: "should start with dop_v1_",
   },
   OPENAI_API_KEY: {
-    description: "OpenAI API key (for OpenAI-based agents)",
-    url: "https://platform.openai.com/api-keys",
     pattern: /^sk-/,
     hint: "should start with sk-",
   },
 };
+
+interface SetupStep {
+  question: string;
+  keys: { key: CredentialKey; label: string; url: string }[];
+}
+
+const SETUP_STEPS: SetupStep[] = [
+  {
+    question: "Do you want agents to push branches and create PRs?",
+    keys: [{
+      key: "GITHUB_TOKEN",
+      label: "GitHub token (repo scope)",
+      url: "https://github.com/settings/tokens/new?scopes=repo&description=hal9999",
+    }],
+  },
+  {
+    question: "Which AI agent will you use?",
+    keys: [
+      {
+        key: "CLAUDE_CODE_OAUTH_TOKEN",
+        label: "Claude Code OAuth token (if using Claude with OAuth)",
+        url: "Run `claude` locally once to authenticate, then find the token in ~/.claude/.credentials.json",
+      },
+      {
+        key: "ANTHROPIC_API_KEY",
+        label: "Anthropic API key (if using an API key instead)",
+        url: "https://console.anthropic.com/settings/keys",
+      },
+    ],
+  },
+  {
+    question: "Do you want to run VMs on DigitalOcean?",
+    keys: [{
+      key: "DO_API_TOKEN",
+      label: "DigitalOcean API token",
+      url: "https://cloud.digitalocean.com/account/api/tokens",
+    }],
+  },
+];
 
 async function readHiddenInput(prompt: string): Promise<string> {
   return new Promise((resolve) => {
@@ -63,42 +91,69 @@ async function readHiddenInput(prompt: string): Promise<string> {
   });
 }
 
-async function login(): Promise<void> {
+async function readLine(prompt: string): Promise<string> {
+  return new Promise((resolve) => {
+    const rl = createInterface({ input: process.stdin, output: process.stderr });
+    rl.question(prompt, (answer) => {
+      rl.close();
+      resolve(answer.trim());
+    });
+  });
+}
+
+async function setup(): Promise<void> {
   const store = getStore();
-  console.log(`Credential backend: ${pc.cyan(store.name)}\n`);
-  console.log("Enter credentials for each service. Press Enter to skip.\n");
+  const statuses = getCredentialStatuses();
+  const isSet = (key: CredentialKey) => statuses.find((s) => s.key === key)?.source !== "not set";
+
+  console.log(pc.bold("\nHAL9999 Setup\n"));
 
   let stored = 0;
 
-  for (const key of CREDENTIAL_KEYS) {
-    const help = TOKEN_HELP[key];
-    console.log(`${pc.bold(key)}`);
-    console.log(`  ${help.description}`);
-    console.log(`  ${pc.dim(help.url)}`);
+  for (const step of SETUP_STEPS) {
+    // Check if all keys in this step are already configured
+    const missing = step.keys.filter((k) => !isSet(k.key));
+    if (missing.length === 0) {
+      const names = step.keys.map((k) => k.key).join(", ");
+      console.log(`${pc.green("✓")} ${step.question} ${pc.dim(`(${names} already set)`)}`);
+      continue;
+    }
 
-    const value = await readHiddenInput(`  Token: `);
-
-    if (!value) {
+    const answer = await readLine(`${step.question} ${pc.dim("[Y/n]")} `);
+    if (answer.toLowerCase() === "n") {
       console.log(pc.dim("  Skipped\n"));
       continue;
     }
 
-    // Soft format validation
-    if (help.pattern && !help.pattern.test(value)) {
-      console.log(pc.yellow(`  Warning: ${help.hint}`));
+    for (const { key, label, url } of missing) {
+      console.log(`\n  ${pc.bold(label)}`);
+      console.log(`  ${pc.dim(url)}\n`);
+
+      const value = await readHiddenInput(`  Paste token: `);
+      if (!value) {
+        console.log(pc.dim("  Skipped"));
+        continue;
+      }
+
+      const meta = TOKEN_META[key];
+      if (meta.pattern && !meta.pattern.test(value)) {
+        console.log(pc.yellow(`  Warning: ${meta.hint}`));
+      }
+
+      store.set(key, value);
+      console.log(pc.green(`  Saved to ${store.name}`));
+      stored++;
     }
-
-    store.set(key, value);
-    console.log(pc.green(`  Stored in ${store.name}\n`));
-    stored++;
+    console.log();
   }
 
+  // Summary
+  console.log(pc.bold("─".repeat(40)));
   if (stored > 0) {
-    console.log(pc.green(`\nDone. ${stored} credential(s) stored.`));
-  } else {
-    console.log("\nNo credentials stored.");
+    console.log(pc.green(`${stored} credential(s) saved.\n`));
   }
-  console.log(`Run ${pc.cyan("hal auth status")} to verify.`);
+  status();
+  console.log();
 }
 
 function logout(): void {
@@ -171,34 +226,31 @@ function getCredentialCmd(key: string): void {
 export async function authCommand(argv: string[]): Promise<void> {
   const sub = argv[0];
 
-  if (!sub || sub === "--help" || sub === "-h") {
+  if (sub === "--help" || sub === "-h") {
     console.log(`hal auth — manage credentials
 
 Usage:
-  hal auth <command>
-
-Commands:
-  login                   Interactive credential setup
-  logout                  Remove all stored credentials
-  status                  Show configured credentials and their source
-  set <KEY> <VALUE>       Store a single credential
-  get <KEY>               Read a credential to stdout (respects precedence)
+  hal auth                          Guided setup (skips what's already set)
+  hal auth status                   Show configured credentials and their source
+  hal auth set <KEY> <VALUE>        Store a single credential
+  hal auth get <KEY>                Read a credential to stdout
+  hal auth logout                   Remove all stored credentials
 
 Keys: ${CREDENTIAL_KEYS.join(", ")}
 
 Precedence: environment variables (.env) > credential store
 
 Examples:
-  hal auth login
+  hal auth
   hal auth status
-  hal auth set GITHUB_TOKEN ghp_abc123
-  hal auth get GITHUB_TOKEN`);
+  hal auth set GITHUB_TOKEN ghp_abc123`);
     return;
   }
 
   switch (sub) {
+    case undefined:
     case "login":
-      return login();
+      return setup();
     case "logout":
       return void logout();
     case "status":
