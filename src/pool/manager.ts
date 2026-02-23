@@ -572,10 +572,15 @@ export class VMPoolManager {
     const orphansReleased = await this.releaseOrphans();
 
     // Provider→DB scan: destroy VMs the provider knows about but DB doesn't track
+    // Skip golden images — they have no DB row by design
+    const goldenPatterns = ["hal9999-golden"];
     for (const slot of this.config.slots) {
       try {
         const instances = await slot.provider.listInstances();
         for (const inst of instances) {
+          // Never touch golden images
+          if (goldenPatterns.some((p) => inst.id.startsWith(p))) continue;
+
           const dbVm = this.getVm(inst.id);
           if (!dbVm || dbVm.status === "destroyed") {
             console.log(`Unknown provider instance ${inst.id.slice(0, 12)} (${slot.name}) — destroying`);
