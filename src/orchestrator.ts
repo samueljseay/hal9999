@@ -215,7 +215,7 @@ export class Orchestrator {
     const wrappedContext = `You are working on branch "${branch}". When done:\n1. Commit your changes with a clear message\n2. Push the branch: git push origin ${branch}\n${prInstruction}\nTask:\n${context}`;
 
     // Generate and upload wrapper script, then launch with nohup
-    const wrapperScript = generateWrapperScript(agent, wrappedContext, workdir, githubToken, branch, opts.noPr, opts.planFirst);
+    const wrapperScript = generateWrapperScript(agent, wrappedContext, workdir, githubToken, branch, base, opts.noPr, opts.planFirst);
     const scriptBase64 = Buffer.from(wrapperScript).toString("base64");
 
     log.writeHeader(`launching ${agent.name} agent`);
@@ -563,6 +563,7 @@ function generateWrapperScript(
   workdir: string,
   githubToken?: string,
   branch?: string,
+  base?: string,
   noPr?: boolean,
   planFirst?: boolean,
 ): string {
@@ -716,8 +717,12 @@ if ! git diff --quiet HEAD 2>/dev/null || ! git diff --cached --quiet HEAD 2>/de
 fi
 ${branch ? `git push origin ${branch} 2>/dev/null || true` : ""}
 ${branch && !noPr ? `
-# Capture PR URL if one exists
+# Create PR if agent didn't, then capture URL
 PR_URL=$(gh pr view --json url -q '.url' 2>/dev/null || true)
+if [ -z "$PR_URL" ]; then
+  gh pr create --base ${base ?? "main"} --head ${branch} --fill >> ${OUTPUT_LOG} 2>&1 || true
+  PR_URL=$(gh pr view --json url -q '.url' 2>/dev/null || true)
+fi
 echo "$PR_URL" > ${RESULT_DIR}/pr-url.txt
 ` : ""}
 
