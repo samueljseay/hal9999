@@ -33,8 +33,8 @@ const SETUP_STEPS: SetupStep[] = [
     question: "Do you want agents to push branches and create PRs?",
     keys: [{
       key: "GITHUB_TOKEN",
-      label: "GitHub personal access token",
-      url: "Fine-grained: github.com/settings/personal-access-tokens/new\n    → Select repos → Contents + Pull requests: Read and write\n  Classic: github.com/settings/tokens/new?scopes=public_repo&description=hal9999",
+      label: "GitHub fine-grained token",
+      url: "https://github.com/settings/personal-access-tokens/new\n  → \"All repositories\" or select specific repos\n  → Repository permissions: Contents + Pull requests → Read and write",
     }],
   },
   {
