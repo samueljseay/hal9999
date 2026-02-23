@@ -25,6 +25,7 @@ const TOKEN_META: Record<CredentialKey, { pattern?: RegExp; hint?: string }> = {
 
 interface SetupStep {
   question: string;
+  required?: boolean;
   keys: { key: CredentialKey; label: string; url: string }[];
 }
 
@@ -38,7 +39,8 @@ const SETUP_STEPS: SetupStep[] = [
     }],
   },
   {
-    question: "Which AI agent will you use?",
+    question: "Set up AI agent credentials",
+    required: true,
     keys: [
       {
         key: "CLAUDE_CODE_OAUTH_TOKEN",
@@ -119,10 +121,14 @@ async function setup(): Promise<void> {
       continue;
     }
 
-    const answer = await readLine(`${step.question} ${pc.dim("[Y/n]")} `);
-    if (answer.toLowerCase() === "n") {
-      console.log(pc.dim("  Skipped\n"));
-      continue;
+    if (step.required) {
+      console.log(pc.bold(step.question));
+    } else {
+      const answer = await readLine(`${step.question} ${pc.dim("[Y/n]")} `);
+      if (answer.toLowerCase() === "n") {
+        console.log(pc.dim("  Skipped\n"));
+        continue;
+      }
     }
 
     for (const { key, label, url } of missing) {
