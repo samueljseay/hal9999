@@ -575,9 +575,14 @@ function generateWrapperScript(
     ...agent.env,
   };
 
+  // gh CLI uses GH_TOKEN, not GITHUB_TOKEN — mirror it so `gh pr create` works
+  if (allEnvVars.GITHUB_TOKEN && !allEnvVars.GH_TOKEN) {
+    allEnvVars.GH_TOKEN = allEnvVars.GITHUB_TOKEN;
+  }
+
   const sensitiveKeys = new Set([
     "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN",
-    "GITHUB_TOKEN", "DO_API_TOKEN",
+    "GITHUB_TOKEN", "GH_TOKEN", "DO_API_TOKEN",
   ]);
 
   const safeExports: string[] = [];
