@@ -86,6 +86,43 @@ export class VMPoolManager {
     }
   }
 
+  /** Provision a VM with one retry on failure (handles transient Lima issues) */
+  private async provisionWithRetry(progress: (msg: string) => void, maxAttempts = 2): Promise<VmRow> {
+    let lastErr: Error | undefined;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      if (attempt > 1) {
+        progress(`Retrying provisioning (attempt ${attempt}/${maxAttempts})...`);
+      } else {
+        progress("No warm VM available, provisioning new one...");
+      }
+
+      const provisioned = await this.provisionVm();
+      progress(`VM ${provisioned.id.slice(0, 8)} provisioning (${provisioned.provider})...`);
+
+      try {
+        const vm = await this.waitForVm(provisioned.id);
+        progress(`VM ${vm.id.slice(0, 8)} ready (ip: ${vm.ip})`);
+        return vm;
+      } catch (err) {
+        lastErr = err instanceof Error ? err : new Error(String(err));
+        progress(`VM ${provisioned.id.slice(0, 8)} failed: ${lastErr.message}`);
+
+        // Clean up the failed VM
+        try {
+          await this.destroyVm(provisioned.id);
+        } catch {
+          this.db.run(
+            `UPDATE vms SET status = 'error', error = 'failed during provisioning', updated_at = ? WHERE id = ?`,
+            [new Date().toISOString(), provisioned.id]
+          );
+        }
+      }
+    }
+
+    throw lastErr ?? new Error("Provisioning failed after retries");
+  }
+
   async waitForVm(vmId: string, timeoutMs?: number): Promise<VmRow> {
     const vm = this.getVm(vmId);
     if (!vm) throw new Error(`VM ${vmId} not found in DB`);
@@ -121,26 +158,7 @@ export class VMPoolManager {
       progress(`Reusing warm VM ${free.id.slice(0, 8)} (${free.provider})`);
       vm = free;
     } else {
-      progress("No warm VM available, provisioning new one...");
-      const provisioned = await this.provisionVm();
-      progress(`VM ${provisioned.id.slice(0, 8)} provisioning (${provisioned.provider})...`);
-      try {
-        vm = await this.waitForVm(provisioned.id);
-        progress(`VM ${vm.id.slice(0, 8)} ready (ip: ${vm.ip})`);
-      } catch (err) {
-        // Clean up the failed VM so it doesn't block the pool
-        progress(`VM ${provisioned.id.slice(0, 8)} failed to become ready, destroying...`);
-        try {
-          await this.destroyVm(provisioned.id);
-        } catch {
-          // Mark as error if we can't even destroy it
-          this.db.run(
-            `UPDATE vms SET status = 'error', error = 'failed during provisioning', updated_at = ? WHERE id = ?`,
-            [new Date().toISOString(), provisioned.id]
-          );
-        }
-        throw err;
-      }
+      vm = await this.provisionWithRetry(progress);
     }
 
     // Assign VM to task in a transaction (clear idle_since)

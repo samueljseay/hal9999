@@ -149,7 +149,7 @@ export class LimaProvider implements Provider {
       // Clone-based creation: deep-copy a golden image's disk+config
       const goldenName = template.slice("clone:".length);
       await run(["clone", "--tty=false", goldenName, name], 120_000);
-      await run(["start", name, "--tty=false"], 120_000);
+      await run(["start", name, "--tty=false"], 240_000);
     } else {
       // Template-based creation: full cloud-init provisioning
       // First run can take 10+ min (image download + provisioning)
@@ -178,9 +178,9 @@ export class LimaProvider implements Provider {
     const inst = await this.getLimaInstance(id);
     if (!inst) return; // already gone — no-op
 
-    // Stop first (ignore errors — may already be stopped)
-    await this.exec(["stop", id, "--tty=false"]);
-    await this.execOrThrow(["delete", "--force", id, "--tty=false"]);
+    // Force-stop first (immediate kill, no graceful shutdown) — ignore errors if already stopped
+    await this.exec(["stop", "--force", id, "--tty=false"], 30_000);
+    await this.execOrThrow(["delete", "--force", id, "--tty=false"], 30_000);
   }
 
   async getInstance(id: string): Promise<Instance> {
