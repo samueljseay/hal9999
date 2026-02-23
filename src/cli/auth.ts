@@ -34,7 +34,7 @@ const SETUP_STEPS: SetupStep[] = [
     keys: [{
       key: "GITHUB_TOKEN",
       label: "GitHub fine-grained token",
-      url: "https://github.com/settings/personal-access-tokens/new\n  → \"All repositories\" or select specific repos\n  → Repository permissions: Contents + Pull requests → Read and write",
+      url: "https://github.com/settings/personal-access-tokens/new\n  → Only select repositories → pick repos hal will work on\n  → Repository permissions: Contents + Pull requests → Read and write",
     }],
   },
   {
