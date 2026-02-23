@@ -1,33 +1,33 @@
 /**
  * Memorable slug generator for task IDs.
- * Format: adjective-noun (e.g., "bold-falcon", "calm-river")
+ * Format: adjective-noun (e.g., "orbital-signal", "rogue-beacon")
+ * Themed around space, AI, and the HAL concept.
  */
 
 const ADJECTIVES = [
-  "bold", "brave", "bright", "calm", "clear", "cool", "crisp", "dark",
-  "deep", "dry", "fair", "fast", "firm", "flat", "free", "fresh",
-  "full", "glad", "gold", "grand", "green", "grey", "grim", "keen",
-  "kind", "late", "lean", "light", "live", "long", "loud", "mild",
-  "neat", "new", "odd", "old", "pale", "pink", "plain", "proud",
-  "pure", "quick", "rare", "raw", "red", "rich", "ripe", "rough",
-  "rust", "safe", "sharp", "shy", "slim", "slow", "soft", "sour",
-  "stark", "still", "stone", "strong", "swift", "tall", "tame",
-  "thin", "true", "vast", "vivid", "warm", "wet", "wide", "wild",
+  "astral", "binary", "cold", "cosmic", "covert", "crimson", "dark",
+  "deep", "dormant", "dual", "faint", "fatal", "final", "frozen",
+  "ghost", "hidden", "hollow", "hyper", "inner", "iron", "latent",
+  "linear", "lone", "lost", "low", "lunar", "muted", "neural",
+  "null", "outer", "pale", "primal", "prime", "quiet", "rapid",
+  "rogue", "sharp", "silent", "slim", "solar", "solid", "spare",
+  "stark", "static", "steady", "steep", "stern", "stray", "sub",
+  "swift", "thermal", "tight", "twin", "ultra", "upper", "vast",
+  "vivid", "void", "warp", "zero",
 ];
 
 const NOUNS = [
-  "ant", "ash", "bay", "bee", "birch", "bloom", "bolt", "brook",
-  "cliff", "cloud", "coral", "crane", "creek", "crow", "dawn",
-  "dew", "dove", "drift", "dune", "dust", "eagle", "elm", "ember",
-  "fern", "finch", "flint", "flux", "fog", "forge", "fox", "frost",
-  "gale", "gem", "glen", "grove", "gust", "hawk", "haze", "heron",
-  "hill", "ivy", "jade", "jay", "lake", "lark", "leaf", "lynx",
-  "marsh", "mist", "moss", "moth", "oak", "onyx", "orca", "owl",
-  "palm", "peak", "pine", "plum", "pond", "quail", "rain", "reed",
-  "ridge", "river", "robin", "root", "sage", "sand", "seal", "shade",
-  "shoal", "slate", "snow", "spark", "spruce", "star", "steel",
-  "stone", "storm", "stork", "thorn", "tide", "torch", "trail",
-  "vale", "vine", "wave", "wren", "yew",
+  "arc", "array", "beacon", "bolt", "cache", "cell", "cipher",
+  "circuit", "coil", "core", "cycle", "daemon", "deck", "depot",
+  "drift", "drone", "epoch", "fault", "field", "flare", "flux",
+  "forge", "gate", "grid", "hatch", "helix", "hub", "hull", "index",
+  "latch", "lens", "link", "lock", "loop", "mesh", "mode", "nerve",
+  "nexus", "node", "notch", "null", "orbit", "panel", "patch",
+  "path", "phase", "ping", "pivot", "plume", "pod", "port", "probe",
+  "pulse", "rack", "relay", "rift", "ring", "rover", "scan", "scope",
+  "shaft", "shell", "shift", "silo", "signal", "slot", "socket",
+  "span", "spark", "spike", "stack", "surge", "sync", "trace",
+  "valve", "vault", "vector", "vent", "volt", "wire",
 ];
 
 /** Generate a random adjective-noun slug */
