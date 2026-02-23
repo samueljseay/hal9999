@@ -4,6 +4,7 @@ import { orchestrator, normalizeProvider, defaultProvider } from "./context.ts";
 import { shortId } from "./resolve.ts";
 import { tailLog } from "../logs.ts";
 import { hal } from "./ui.ts";
+import { getCredential } from "../auth/store.ts";
 
 function normalizeRepo(input: string): string {
   // Already a full URL
@@ -80,6 +81,15 @@ Examples:
   const repoUrl = normalizeRepo(repo);
   if (values.verbose) process.env.HAL_VERBOSE = "1";
   const providerStr = values.provider ? normalizeProvider(values.provider) : defaultProvider();
+
+  // Check for GITHUB_TOKEN — required for push/PR
+  if (!values["no-pr"] && !getCredential("GITHUB_TOKEN")) {
+    console.error(pc.red("Error: GITHUB_TOKEN is not set. Cannot push or create PRs."));
+    console.error(`Set it with: ${pc.cyan("hal auth set GITHUB_TOKEN <token>")}`);
+    console.error(`Or add to .env: ${pc.cyan("GITHUB_TOKEN=ghp_...")}`);
+    console.error(`To skip PR creation: ${pc.cyan("--no-pr")}`);
+    process.exit(1);
+  }
 
   const taskOpts = {
     branch: values.branch,
